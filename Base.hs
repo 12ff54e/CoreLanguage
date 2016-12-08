@@ -2,8 +2,6 @@
 
 --    ) where
 
-import Data.List (intercalate)
-
 -- | Expressions are the basic unit of the /Core Language/
 -- and thus a new data type is defined. Expression can be variable,
 -- number, type constructor, function application, let binding,
@@ -120,13 +118,15 @@ preludeDefs = [ ("id",["x"],EVar "x"),
 -- this new data type and keep it unevaluated until we need to print it out.
 -- The new data type acts just like a container.
 
-data Cseq   = CTip
+data Cseq   = CNil
             | CStr String
             | CAppend Cseq Cseq
+            | CNewline
+            | CIndent Cseq
 
 -- | empty container
 cEmpty :: Cseq
-cEmpty = CTip
+cEmpty = CNil
 
 -- | put a string in the container
 cStr :: String -> Cseq
@@ -134,60 +134,92 @@ cStr str = CStr str
 
 -- | put a connection request in a container
 cAppend :: Cseq -> Cseq -> Cseq
-CTip `cAppend` cseq = cseq
-cseq `cAppend` CTip = cseq
+CNil `cAppend` cseq = cseq
+cseq `cAppend` CNil = cseq
 cseq1 `cAppend` cseq2 = CAppend cseq1 cseq2
+
+-- | put a line break with indentation in container
+cNewline :: Cseq
+cNewline = CNewline
+
+-- | put an indentation indication in container
+cIndent :: Cseq -> Cseq
+cIndent cseq = CIndent cseq
 
 -- | concatenate a list of cseqs to one
 cConcat :: [Cseq] -> Cseq
-cConcat = foldr cAppend CTip
+cConcat = foldr cAppend CNil
 
 -- | @intercalate@ for Cseq
 cIntercalate :: Cseq -> [Cseq] -> Cseq
 cIntercalate cspt = foldr1 
     (\x y -> x `cAppend` cspt `cAppend` y)
 
--- | expand the cseq container to a string
-cExpand :: [Cseq] -> String
-cExpand [] = []
-cExpand (CTip : as) = cExpand as
-cExpand (CStr a : as) = a ++ cExpand as
-cExpand (CAppend a b : as) = cExpand (a:b:as)
+-- | expand the cseq container to a string with proper indentation
+cExpand :: Int          -- ^ keep track of current column 
+        -> [(Cseq,Int)] -- ^ the int indicates indentation 
+        -> String
+cExpand _ [] = []
+cExpand col ((CNil, _) : as) = cExpand col as
+cExpand col ((CStr a, _) : as) = a ++ cExpand (col+length a) as
+cExpand col ((CAppend a b, ind) : as) = cExpand col ((a,ind):(b,ind):as)
+cExpand col ((CNewline, ind) : as) = 
+    '\n':(replicate ind ' ') ++ cExpand ind as
+cExpand col ((CIndent a, ind) : as) = cExpand col ((a,col) : as)
+
+-- | print the program code
+pPrint :: CoreProgram -> String
+pPrint cp = cExpand 0 [(pprProgram cp,0)]
 
 -- | turn a program into cseq
 pprProgram :: CoreProgram -> Cseq
 pprProgram = cConcat . map pprScDef
     where pprScDef (var,vars,expr) =
-            cStr var `cAppend` 
-            cStr (' ':unwords vars) `cAppend`
-            CStr " = " `cAppend`
-            pprExpr expr `cAppend`
-            CStr "\n"
+            cConcat [   cStr var, cStr (' ':unwords vars),
+                        cStr " = ", cIndent (pprExpr expr), cNewline ]
 
 -- | turn expression into cseq, use pattern match to deal with different values.
 pprExpr :: CoreExpr -> Cseq
 pprExpr (EVar var) = cStr var
 pprExpr (ENum num) = cStr.show $ num
-pprExpr (EConstr tag arity) =
-    CStr "Pack{" `cAppend` (cStr.show $ tag) `cAppend`
-    CStr "," `cAppend` (cStr.show $ arity) `cAppend` CStr "}"
-pprExpr (EAp func x) = pprExpr func `cAppend` CStr " " `cAppend` pprAExpr x
---pprExpr (ELet flag varExpr bodyExpr) =
---    "let " `cAppend` 
---    (intercalate " ; " $ map (\(v,e) -> v`cAppend`" = "`cAppend`pprExpr e) varExpr) `cAppend`
---     "in " `cAppend` pprExpr bodyExpr
---pprExpr (ECase expr alts) =
---    "case "`cAppend`pprExpr expr`cAppend`" of \n\t"`cAppend`
---    intercalate "\n\t" (map (\(tag,vars,altExpr) -> 
---        "<"`cAppend`show tag`cAppend`"> "`cAppend`
---        (intercalate " " vars)`cAppend`" -> "`cAppend`
---        pprExpr altExpr) alts)
+--pprExpr (EConstr tag arity) =
+--    cStr "Pack{" `cAppend` (cStr.show $ tag) `cAppend`
+--    cStr "," `cAppend` (cStr.show $ arity) `cAppend` cStr "}"
+pprExpr (EAp func x) = pprExpr func `cAppend` cStr " " `cAppend` pprAExpr x
+pprExpr (ELet isRec varExpr bodyExpr) =
+    cConcat [   cStr keyword, cNewline,
+                cStr "    ", cIndent (pprDefs varExpr), cNewline,
+                cStr "in ", pprExpr bodyExpr ]
+    where keyword
+            | not isRec = "let"
+            | otherwise = "letrec"
+pprExpr (ECase expr alts) =
+    cConcat [   cStr "case ", pprExpr expr, cStr " of ", cNewline,
+                cStr "    ", cIndent (pprAlts alts) ]
 --pprExpr (ELam vars expr) = "(\\ "`cAppend`unwords vars`cAppend` " . " `cAppend` pprExpr expr `cAppend` ")"
 
 -- parenthese non-atomic expression
 pprAExpr :: CoreExpr -> Cseq
 pprAExpr e
     | isAtomicExpr e = pprExpr e
-    | otherwise = CStr "(" `cAppend` pprExpr e `cAppend` CStr ")"
+    | otherwise = cStr "(" `cAppend` pprExpr e `cAppend` cStr ")"
 
+-- auxiliary function to print definations in let binding
+pprDefs :: [(Name,Expr Name)] -> Cseq
+pprDefs = (cIntercalate spt) . (map pprDef)
+    where spt = cStr ";" `cAppend` cNewline
+
+pprDef :: (Name,Expr Name) -> Cseq
+pprDef (var,expr) = cConcat [   cStr var, cStr " = ",
+                                cIndent (pprExpr expr) ]
+
+-- auxiliary function to print alternatives in case expression
+pprAlts :: [CoreAlter] -> Cseq
+pprAlts = (cIntercalate cNewline) . (map pprAlt)
+
+pprAlt :: CoreAlter -> Cseq
+pprAlt (tag,vars,expr) = 
+    cConcat [   cStr "<", cStr (show tag), cStr "> ",
+                cStr (unwords vars), cStr " -> ",
+                cIndent (pprExpr expr) ]
 
