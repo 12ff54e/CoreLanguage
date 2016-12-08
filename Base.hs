@@ -1,6 +1,4 @@
---Module Base(
-
---    ) where
+module CoreLanguage.Base where
 
 -- | Expressions are the basic unit of the /Core Language/
 -- and thus a new data type is defined. Expression can be variable,
@@ -178,14 +176,25 @@ pprProgram = cConcat . map pprScDef
             cConcat [   cStr var, cStr (' ':unwords vars),
                         cStr " = ", cIndent (pprExpr expr), cNewline ]
 
--- | turn expression into cseq, use pattern match to deal with different values.
+-- | turn expression into cseq, use pattern match to deal with different constructors.
+-- 
+-- When dealing with function application, certain operators will take the infix form
+-- and parenthesised according to precedence, show as below:
+--
+--  * Precedence    Operator
+--  *       6       Application
+--  *       5       *,/
+--  *       4       +,-
+--  *       3       ==,~=,>,>=,<,<=
+--  *       2       &
+--  *       1       |
 pprExpr :: CoreExpr -> Cseq
 pprExpr (EVar var) = cStr var
 pprExpr (ENum num) = cStr.show $ num
 --pprExpr (EConstr tag arity) =
 --    cStr "Pack{" `cAppend` (cStr.show $ tag) `cAppend`
 --    cStr "," `cAppend` (cStr.show $ arity) `cAppend` cStr "}"
-pprExpr (EAp func x) = pprExpr func `cAppend` cStr " " `cAppend` pprAExpr x
+pprExpr (EAp func x) = pprFAExpr 0 (EAp func x)
 pprExpr (ELet isRec varExpr bodyExpr) =
     cConcat [   cStr keyword, cNewline,
                 cStr "    ", cIndent (pprDefs varExpr), cNewline,
@@ -198,11 +207,35 @@ pprExpr (ECase expr alts) =
                 cStr "    ", cIndent (pprAlts alts) ]
 --pprExpr (ELam vars expr) = "(\\ "`cAppend`unwords vars`cAppend` " . " `cAppend` pprExpr expr `cAppend` ")"
 
--- parenthese non-atomic expression
-pprAExpr :: CoreExpr -> Cseq
-pprAExpr e
-    | isAtomicExpr e = pprExpr e
-    | otherwise = cStr "(" `cAppend` pprExpr e `cAppend` cStr ")"
+-- infix form and parenthesis according to precedence,
+-- pcd is upper level operator precedence.
+pprFAExpr :: Int -> CoreExpr -> Cseq
+pprFAExpr pcd (EAp (EAp (EVar op) x) y)
+-- infix binary operator cases
+    | opPcd < 6 && opPcd <= pcd = cConcat [ cStr "(", pprFAExpr opPcd x, 
+                                            cStr " ", cStr op, cStr " ",
+                                            pprFAExpr opPcd y, cStr ")" ]
+    | opPcd < 6 = cConcat [ pprFAExpr opPcd x, cStr " ", cStr op,
+                            cStr " ", pprFAExpr opPcd y ]
+-- general operator cases
+    | pcd == 6 = cConcat [  cStr "(", cStr op, cStr " ", pprFAExpr opPcd x,
+                            cStr " ", pprFAExpr opPcd y, cStr " " ]
+    | otherwise = cConcat [ cStr op, cStr " ", pprFAExpr opPcd x, 
+                            cStr " ", pprFAExpr opPcd y ]
+        where opPcd
+                | op `elem` ["*","/"] = 5
+                | op `elem` ["+","-"] = 4
+                | op `elem` ["==","~=",">",">=","<","<="] = 3
+                | op == "&" = 2
+                | op == "|" = 1
+                | otherwise = 6
+-- more general function application cases
+pprFAExpr pcd (EAp func x)
+    | pcd == 6 = cConcat [  cStr "(", pprFAExpr 6 func, cStr " ",
+                            pprFAExpr 6 x, cStr ")" ]
+    | otherwise = cConcat [ pprFAExpr 6 func, cStr " ", pprFAExpr 6 x ]
+-- other expression return to normal pprExpr
+pprFAExpr _ expr = pprExpr expr
 
 -- auxiliary function to print definations in let binding
 pprDefs :: [(Name,Expr Name)] -> Cseq
