@@ -219,7 +219,7 @@ pprFAExpr pcd (EAp (EAp (EVar op) x) y)
                             cStr " ", pprFAExpr opPcd y ]
 -- general operator cases
     | pcd == 6 = cConcat [  cStr "(", cStr op, cStr " ", pprFAExpr opPcd x,
-                            cStr " ", pprFAExpr opPcd y, cStr " " ]
+                            cStr " ", pprFAExpr opPcd y, cStr ")" ]
     | otherwise = cConcat [ cStr op, cStr " ", pprFAExpr opPcd x, 
                             cStr " ", pprFAExpr opPcd y ]
         where opPcd
@@ -231,9 +231,9 @@ pprFAExpr pcd (EAp (EAp (EVar op) x) y)
                 | otherwise = 6
 -- more general function application cases
 pprFAExpr pcd (EAp func x)
-    | pcd == 6 = cConcat [  cStr "(", pprFAExpr 6 func, cStr " ",
+    | pcd == 6 = cConcat [  cStr "(", pprFAExpr 5 func, cStr " ",
                             pprFAExpr 6 x, cStr ")" ]
-    | otherwise = cConcat [ pprFAExpr 6 func, cStr " ", pprFAExpr 6 x ]
+    | otherwise = cConcat [ pprFAExpr 5 func, cStr " ", pprFAExpr 6 x ]
 -- other expression return to normal pprExpr
 pprFAExpr _ expr = pprExpr expr
 
