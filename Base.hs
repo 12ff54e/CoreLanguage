@@ -153,9 +153,28 @@ cIntercalate :: Cseq -> [Cseq] -> Cseq
 cIntercalate cspt = foldr1 
     (\x y -> x `cAppend` cspt `cAppend` y)
 
--- | expand the cseq container to a string with proper indentation
-cExpand :: Int          -- ^ keep track of current column 
-        -> [(Cseq,Int)] -- ^ the int indicates indentation 
+-- | put a number in container
+cNum :: Int -> Cseq
+cNum = cStr.show
+
+-- | left padding number form
+cLPNum :: Int -> Int -> Cseq
+cLPNum pd num = cStr (replicate (pd - length ns) ' ')
+                    `cAppend` cStr ns
+    where ns = show num
+
+-- | numbered list
+cNumLst :: [Cseq] -> Cseq
+cNumLst = cConcat . zipWith lst [1..]
+    where lst id cseq = cConcat [ cLPNum 4 id, cStr ") ", cIndent cseq, cNewline ]
+
+-- | expand the cseq container to a string
+cToStr :: Cseq -> String
+cToStr cseq = cExpand 0 [(cseq,0)]
+
+-- | auxiliary function of cToStr
+cExpand :: Int          -- keep track of current column 
+        -> [(Cseq,Int)] -- the int indicates indentation 
         -> String
 cExpand _ [] = []
 cExpand col ((CNil, _) : as) = cExpand col as
@@ -165,16 +184,21 @@ cExpand col ((CNewline, ind) : as) =
     '\n':(replicate ind ' ') ++ cExpand ind as
 cExpand col ((CIndent a, ind) : as) = cExpand col ((a,col) : as)
 
+-----------------------------------------------------------------------------
+
 -- | print the program code
 pPrint :: CoreProgram -> String
-pPrint cp = cExpand 0 [(pprProgram cp,0)]
+pPrint = cToStr.pprProgram 
 
 -- | turn a program into cseq
 pprProgram :: CoreProgram -> Cseq
-pprProgram = cConcat . map pprScDef
-    where pprScDef (var,vars,expr) =
-            cConcat [   cStr var, cStr (' ':unwords vars),
-                        cStr " = ", cIndent (pprExpr expr), cNewline ]
+pprProgram = (cIntercalate spt). map pprScDef
+    where spt = cStr ";" `cAppend` cNewline
+
+pprScDef :: CoreScDef -> Cseq
+pprScDef (var,vars,expr) =
+    cConcat [   cStr var, cStr (' ':unwords vars),
+                cStr " = ", cIndent (pprExpr expr) ]
 
 -- | turn expression into cseq, use pattern match to deal with different constructors.
 -- 
@@ -248,7 +272,8 @@ pprDef (var,expr) = cConcat [   cStr var, cStr " = ",
 
 -- auxiliary function to print alternatives in case expression
 pprAlts :: [CoreAlter] -> Cseq
-pprAlts = (cIntercalate cNewline) . (map pprAlt)
+pprAlts = (cIntercalate spt) . (map pprAlt)
+    where spt = cStr ";" `cAppend` cNewline
 
 pprAlt :: CoreAlter -> Cseq
 pprAlt (tag,vars,expr) = 
