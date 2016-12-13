@@ -198,7 +198,8 @@ pprProgram = (cIntercalate spt). map pprScDef
 pprScDef :: CoreScDef -> Cseq
 pprScDef (var,vars,expr) =
     cConcat [   cStr var, cStr (' ':unwords vars),
-                cStr " = ", cIndent (pprExpr expr) ]
+                cStr misc, cIndent (pprExpr expr) ]
+    where misc  | null vars = "= " | otherwise = " = "
 
 -- | turn expression into cseq, use pattern match to deal with different constructors.
 -- 
@@ -229,9 +230,9 @@ pprExpr (ELet isRec varExpr bodyExpr) =
 pprExpr (ECase expr alts) =
     cConcat [   cStr "case ", pprExpr expr, cStr " of ", cNewline,
                 cStr "    ", cIndent (pprAlts alts) ]
---pprExpr (ELam vars expr) = "(\\ "`cAppend`unwords vars`cAppend` " . " `cAppend` pprExpr expr `cAppend` ")"
+pprExpr (ELam vars expr) = 
+    cConcat [ cStr "\\ ", cStr (unwords vars), cStr " -> ", pprExpr expr ]
 
--- infix form and parenthesis according to precedence,
 -- pcd is upper level operator precedence.
 pprFAExpr :: Int -> CoreExpr -> Cseq
 pprFAExpr pcd (EAp (EAp (EVar op) x) y)
