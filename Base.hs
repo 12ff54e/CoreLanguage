@@ -1,5 +1,7 @@
 module CoreLanguage.Base where
 
+import CoreLanguage.Utility
+
 -- | Expressions are the basic unit of the /Core Language/
 -- and thus a new data type is defined. Expression can be variable,
 -- number, type constructor, function application, let binding,
@@ -159,7 +161,7 @@ cNum = cStr.show
 
 -- | left padding number form
 cLPNum :: Int -> Int -> Cseq
-cLPNum pd num = cStr (replicate (pd - length ns) ' ')
+cLPNum pd num = cStr (space (pd - length ns))
                     `cAppend` cStr ns
     where ns = show num
 
@@ -181,7 +183,7 @@ cExpand col ((CNil, _) : as) = cExpand col as
 cExpand col ((CStr a, _) : as) = a ++ cExpand (col+length a) as
 cExpand col ((CAppend a b, ind) : as) = cExpand col ((a,ind):(b,ind):as)
 cExpand col ((CNewline, ind) : as) = 
-    '\n':(replicate ind ' ') ++ cExpand ind as
+    '\n':(space ind) ++ cExpand ind as
 cExpand col ((CIndent a, ind) : as) = cExpand col ((a,col) : as)
 
 -----------------------------------------------------------------------------

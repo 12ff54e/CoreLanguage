@@ -131,14 +131,17 @@ emptyBST = Tip
 insertBST :: Ord k => k -> a -> BST k a -> BST k a
 insertBST key obj Tip = BinNode 1 key obj Tip Tip
 insertBST key obj tree@(BinNode size k o lc rc)
-    | isFull = case compare key k of
+    | size' `elemInfAsc` powerOf2 = case compare key k of
                 LT -> BinNode size' key obj Tip tree
                 GT -> BinNode size' key obj tree Tip
     | otherwise = case compare key k of
                     LT -> BinNode size' k o (insertBST key obj lc) rc
                     GT -> BinNode size' k o lc (insertBST key obj rc)
                     EQ -> BinNode size' k obj lc rc
-        where isFull = size' `elem` powerOf2
+        where elemInfAsc t (a:as)
+                | t==a = True
+                | t<a = False
+                | otherwise = t `elemInfAsc` as
               powerOf2 = iterate (flip shiftL 1) 1
               size' = size+1
 
