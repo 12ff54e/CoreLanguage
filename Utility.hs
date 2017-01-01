@@ -1,9 +1,25 @@
+-----------------------------------------------------------------------------
+-- |
+-- Module   : CoreLanguage.Utility
+--
+-- Heap implemented using Binary Search Tree(BST), the interface is defined
+-- same as in the book. The function that remove object in heap is 
+-- ill-implement because I have not yet found out how to maintain balance of 
+-- the tree after deleting nodes in it.
+--
+-- Associate list defined as type synonym of /Map/ in /Data.Map/, use
+-- function in the same module to create the interface.
+--
+-- Besides, some useful function (those in A.5) also defined.
+--
+-----------------------------------------------------------------------------
+
 module CoreLanguage.Utility (
     
     -- * A.1 Heap
     
-    -- ** Heap type
-    Heap(..)
+    -- ** Heap types
+    Heap(..), Addr
 
     -- ** Heap Construction
     , hInitial, hAlloc, hUpdate, hFree
@@ -44,8 +60,7 @@ import Data.Map (Map, keys, elems, findWithDefault,
 --  the address pool, since the node index are monotonic when insertBSTed
 --  in the BST, the tree is also balanced. The following functions are
 --  all from A.1.1 in appendix, but implementation differently, and 
---  @showaddr@ is not needed since it's a type synonym of @Int@ and its
---  an instance of @Show@
+--  @showaddr@ is not needed since @Addr@ is a type synonym of @Int@.
 type Heap a = ([Addr], [Addr], BST Addr a)
 
 -- | address are represented as numbers
@@ -64,7 +79,7 @@ hAlloc (addr:ap, uap, tree) node =
 hUpdate :: Heap a -> Addr -> a -> Heap a
 hUpdate (ap, uap, tree) addr node = (ap, uap, updateBST addr node tree)
 
--- | remove a specific object
+-- | remove a specific object, for now it only changes address pool
 hFree :: Heap a -> Addr -> Heap a
 hFree (ap, uap, tree) addr = (addr:ap, del addr uap, tree)
     where del x0 (x:xs)
@@ -92,26 +107,36 @@ hNull = 0
 hIsnull :: Addr -> Bool
 hIsnull a = a == hNull
 
+-- | use Map in Data.Map to implement @Assocs@
 type Assocs a b = Map a b
 
+-- | @aLookup aList key default@ find the value of @key@ in @aList@
+-- and return @default@ if the key is not in associate list
 aLookup :: Ord k => Assocs k v -> k -> v -> v
 aLookup al key def = findWithDefault def key al
 
+-- | gives all the keys of the associate list
 aDomain :: Assocs k v -> [k]
 aDomain = keys
 
+-- | gives all the values of the associate list
 aRange :: Assocs k v -> [v]
 aRange = elems
 
+-- | an empty associate list
 aEmpty :: Assocs k v
 aEmpty = empty
 
+-- | Union two associate lists. When key crashes, the value from
+-- first assocs list is prefered.
 aCombine :: Ord k => Assocs k v -> Assocs k v -> Assocs k v
 aCombine = union
 
+-- | insert a pair of key-value in to assoc list
 aInsert :: Ord k => (k,v) -> Assocs k v -> Assocs k v
 aInsert (k,v) al = insert k v al
 
+-- | convert a list of key-value pair into assocs list
 aFromList :: Ord k => [(k,v)] -> Assocs k v
 aFromList = fromList
 
@@ -168,9 +193,10 @@ sizeOfBST (BinNode size _ _ _ _) = size
 -----------------------------------------------------------------------
 
 -- | a combination of map and foldl
-mapAccuml   :: (a -> b -> (a,c))    -- ^ function generates new acc 
-                                    -- and result list element
-            -> a                    -- ^ initial acc
+mapAccuml   :: (a -> b -> (a,c))    -- ^ function take the old accumulator and
+                                    -- element from input list, generates new 
+                                    -- accumulator and result list element
+            -> a                    -- ^ initial accumulator
             -> [b]                  -- ^ input list
             -> (a, [c])             -- ^ final acc and result list
 mapAccuml f acc [] = (acc,[])
@@ -190,5 +216,6 @@ sort as = merge (sort xs) (sort ys)
             | m<n = m : merge mt ns
             | otherwise = n : merge ms nt
 
+-- | generate a string of @n@ spaces
 space :: Int -> String
 space n = replicate n ' '

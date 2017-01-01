@@ -1,4 +1,29 @@
-module CoreLanguage.Base where
+-----------------------------------------------------------------------------
+-- |
+-- Module:  CoreLanguage.Base
+--
+-- The basic module of /Core Language/, including three parts
+--  * basic data types
+--  * a simple prelude
+--  * a code printer
+--
+-----------------------------------------------------------------------------
+
+module CoreLanguage.Base (
+
+    -- * Data types
+    Expr(..), Alter(..), ScDef(..), Program(..)
+    , CoreExpr, CoreAlter, CoreScDef, CoreProgram
+    , Name, IsRec
+
+    -- * prelude functions and some basic auxilary functions
+    , preludeDefs
+    , isAtomicExpr, bindersOf, rhssOf, recursive, nonRecursive
+
+    -- * Code Printer
+    , pPrint
+
+    )where
 
 import CoreLanguage.Utility
 
@@ -218,17 +243,17 @@ pprScDef (var,vars,expr) =
 pprExpr :: CoreExpr -> Cseq
 pprExpr (EVar var) = cStr var
 pprExpr (ENum num) = cStr.show $ num
---pprExpr (EConstr tag arity) =
---    cStr "Pack{" `cAppend` (cStr.show $ tag) `cAppend`
---    cStr "," `cAppend` (cStr.show $ arity) `cAppend` cStr "}"
+pprExpr (EConstr tag arity) =
+    cStr "Pack{" `cAppend` (cStr.show $ tag) `cAppend`
+    cStr ", " `cAppend` (cStr.show $ arity) `cAppend` cStr "}"
 pprExpr (EAp func x) = pprFAExpr 0 (EAp func x)
 pprExpr (ELet isRec varExpr bodyExpr) =
     cConcat [   cStr keyword, cNewline,
                 cStr "    ", cIndent (pprDefs varExpr), cNewline,
                 cStr "in ", pprExpr bodyExpr ]
     where keyword
-            | not isRec = "let"
-            | otherwise = "letrec"
+            | isRec = "letrec"
+            | otherwise = "let"
 pprExpr (ECase expr alts) =
     cConcat [   cStr "case ", pprExpr expr, cStr " of ", cNewline,
                 cStr "    ", cIndent (pprAlts alts) ]

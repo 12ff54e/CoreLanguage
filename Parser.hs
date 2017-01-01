@@ -1,4 +1,19 @@
-module CoreLanguage.Parser where
+-----------------------------------------------------------------------------
+-- |
+-- Module:  CoreLanguage.Parser
+--
+-- This module provide a parser for /Core Language/, transform primitive
+-- code string into syntax forest represented by data type defined in 
+-- @CoreLanguage.Base@ module.
+--
+-----------------------------------------------------------------------------
+
+module CoreLanguage.Parser (
+    -- * parser
+    parse
+    -- * debugging
+    , clex, syntax 
+    )where
 
 import CoreLanguage.Base
 
@@ -17,7 +32,7 @@ type Token = ((Int,Int),String)
 -- paired with remaining list of tokens.
 type Parser a = [Token] -> [(a,[Token])]
 
-------------------------------------------------
+-----------------------------------------------------------------------------
 
 -- | The lexical analyser breaks the input string
 -- into token list, it should:
@@ -207,7 +222,7 @@ pAlts = pOneOrMoreWithSpt pAlt (pLit ";")
             mk_alt tag vars _ expr = (tag,vars,expr)
             ts x y z = y
 
---------------------------------------------------------------------
+-----------------------------------------------------------------------------
 -- this block dealing with function aplication, infix operator 
 -- precedence and assocaitivity
 
