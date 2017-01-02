@@ -3,6 +3,7 @@
 -- Module:  CoreLanguage.Base
 --
 -- The basic module of /Core Language/, including three parts
+--
 --  * basic data types
 --  * a simple prelude
 --  * a code printer
@@ -12,7 +13,7 @@
 module CoreLanguage.Base (
 
     -- * Data types
-    Expr(..), Alter(..), ScDef(..), Program(..)
+    Expr(..), Alter(..), ScDef(..), Program(..), Cseq(..)
     , CoreExpr, CoreAlter, CoreScDef, CoreProgram
     , Name, IsRec
 
@@ -23,6 +24,23 @@ module CoreLanguage.Base (
     -- * Code Printer
     , pPrint
 
+    -- ** String Container
+
+    -- *** basic element
+    , cEmpty, cStr, cNum
+   
+     -- *** format control
+    , cNewline, cIndent
+    
+    -- *** combination
+    , cAppend, cConcat, cIntercalate
+    
+    -- *** table
+    , cLPNum, cNumList
+    
+    -- *** transform back to string
+    , cToStr
+    
     )where
 
 import CoreLanguage.Utility
@@ -31,9 +49,10 @@ import CoreLanguage.Utility
 -- and thus a new data type is defined. Expression can be variable,
 -- number, type constructor, function application, let binding,
 -- case expression and lambda abstraction, and limited to these things.
--- | The type parameter is the data type of binders,
--- and at most of the time it will be name, the only exception occurs while
--- dealing with lambda lifting in Chapter 6 of the book. 
+-- 
+-- The type parameter is the data type of binders, and at most of the time 
+-- it will be name, the only exception occurs while dealing with 
+-- lambda lifting in Chapter 6 of the book. 
 data Expr a = EVar Name
                 -- ^ variable
             | ENum Int
@@ -42,21 +61,13 @@ data Expr a = EVar Name
                 -- ^ constructor
             | EAp (Expr a) (Expr a)
                 -- ^ function application
-            | ELet
-                IsRec
-                    -- ^ flag of recursion
-                [(a,Expr a)]
-                    -- ^ definations
-                (Expr a)
-                    -- ^ body of let
-            | ECase
-                (Expr a)
-                    -- ^ expression to be scrutinised
-                [Alter a]
-                    -- ^ alternatives
+            | ELet IsRec [(a,Expr a)] (Expr a)
+                -- ^ let bindings with a flag indicating it being recursive
+            | ECase (Expr a) [Alter a]
+                -- ^ expression to be scrutinised and alternatives
             | ELam [a] (Expr a)
-                    -- ^ lambda expression
-            deriving (Show)
+                -- ^ lambda expression
+            deriving (Eq, Show)
 type CoreExpr = Expr Name
 
 -- type synonymas are used to define the type of coreExpr
@@ -87,9 +98,9 @@ isAtomicExpr (EVar _) = True
 isAtomicExpr (ENum _) = True
 isAtomicExpr _ = False
 
--- | The flag to determine whether the let binding is recursive or not,
--- -- and the two boolen values are defined as follows:
+-- | The flag to determine whether the let binding is recursive or not
 type IsRec = Bool
+-- | Rename bool value to make it more comprehensive
 recursive, nonRecursive :: IsRec
 recursive = True
 nonRecursive = False
@@ -102,7 +113,7 @@ bindersOf = map fst
 rhssOf :: [(a,b)] -> [b]
 rhssOf = map snd
 
---------------------------------------------------------
+-----------------------------------------------------------------------------
 
 
 -- | A rather small prelude including six functions:
@@ -129,7 +140,7 @@ preludeDefs = [ ("id",["x"],EVar "x"),
                 ("twice",["f"],
                     EAp (EAp (EVar "compose") (EVar "f")) (EVar "f"))]
 
----------------------------------------------------------
+-----------------------------------------------------------------------------
 
 -- | First define a data type for printing code effectively.
 --
@@ -153,9 +164,10 @@ data Cseq   = CNil
 cEmpty :: Cseq
 cEmpty = CNil
 
--- | put a string in the container
+-- | put a string in the container, and subsititute line break
+-- to @cNewLine@
 cStr :: String -> Cseq
-cStr str = CStr str
+cStr = cIntercalate cNewline .  map CStr . lines 
 
 -- | put a connection request in a container
 cAppend :: Cseq -> Cseq -> Cseq
@@ -184,16 +196,17 @@ cIntercalate cspt = foldr1
 cNum :: Int -> Cseq
 cNum = cStr.show
 
--- | left padding number form
+-- | left padding number form, @cLPNum pd num@ make sure the string of @num@
+-- occupying @pd@ width of space
 cLPNum :: Int -> Int -> Cseq
 cLPNum pd num = cStr (space (pd - length ns))
                     `cAppend` cStr ns
     where ns = show num
 
 -- | numbered list
-cNumLst :: [Cseq] -> Cseq
-cNumLst = cConcat . zipWith lst [1..]
-    where lst id cseq = cConcat [ cLPNum 4 id, cStr ") ", cIndent cseq, cNewline ]
+cNumList :: [Cseq] -> Cseq
+cNumList = cConcat . zipWith lst [1..]
+    where lst sn cseq = cConcat [ cLPNum 4 sn, cStr ") ", cIndent cseq, cNewline ]
 
 -- | expand the cseq container to a string
 cToStr :: Cseq -> String

@@ -154,9 +154,27 @@ getArgs sc (name:args) (addr:stack) heap = (newStack, argList')
 
 -----------------------------------------------------------------------------
 
+-- | Extract informations and format them for printing, exploiting string
+-- container defined in Base module
 showResult :: [TiState] -> String
-showResult = show . takeResult . last
-    where takeResult ([addr], _, heap, _, stat) = num
-            where NNum num = hLookup heap addr
+showResult states = cToStr $ 
+    cNumList (map pprState states) `cAppend` pprStatsInState (last states)
 
+pprState :: TiState -> Cseq
+pprState (stack, _, heap, _, _) = 
+    cIntercalate cNewline $ pprNode <$> stack <*> pure heap
+    
+pprNode :: Addr -> TiHeap -> Cseq  
+pprNode addr heap = cConcat [ cLPNum 3 addr, cStr ": ", 
+    case hLookup heap addr of 
+      NAp a1 a2 -> cConcat [ cStr "NAp", cLPNum 4 a1, cLPNum 4 a2 ]
+      NSC sc _ _ -> cStr "NSC " `cAppend` cStr sc
+      NNum num -> cStr "NNum " `cAppend` cNum num
+    ]
+
+pprStatsInState :: TiState -> Cseq
+pprStatsInState (_, _, _, _, stats) = 
+    cConcat [   cStr "This program takes ", 
+                cNum . tiStatsGetStep $ stats,
+                cStr " steps." ]
 

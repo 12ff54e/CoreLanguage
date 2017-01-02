@@ -193,6 +193,7 @@ pScDef = pThen4 mk_sc pVar (pZeroOrMore pVar) (pLit "=") pExpr
 
 -- | expression parser of different data constructor
 pExpr, pLet, pCase, pLambda :: Parser CoreExpr
+-- | dealing with precedence of build-in binary opertors
 pExpr_p1, pExpr_p2, pExpr_p3, pExpr_p4, pExpr_p5, pAExpr :: Parser CoreExpr
 
 pExpr = pLet `pOr` pCase `pOr` pLambda `pOr` pExpr_p1
@@ -220,7 +221,7 @@ pAlts = pOneOrMoreWithSpt pAlt (pLit ";")
                             (pLit "->") 
                             pExpr
             mk_alt tag vars _ expr = (tag,vars,expr)
-            ts x y z = y
+            ts _ x _ = x
 
 -----------------------------------------------------------------------------
 -- this block dealing with function aplication, infix operator 
