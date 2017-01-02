@@ -29,6 +29,9 @@ type TiState     = (TiStack, TiDump, TiHeap, TiGlobal, TiStats)
 -- | collect addresses of nodes to be reduced
 type TiStack     = [Addr]
 
+getStackDepth :: TiState -> Int
+getStackDepth (stack, _, _, _, _) = length stack
+
 data TiDump      = DummyType
 
 -- | store all supercombinators (in the beginning) and every expression
@@ -36,24 +39,36 @@ data TiDump      = DummyType
 -- process of instantiation)
 type TiHeap      = Heap (Node Name)
 
--- | a list providing effective query(/O(log n)) from supercombinator to address
+-- | a list providing effective query(/O(log n)) from supercombinator
+-- to address
 type TiGlobal    = Assocs Name Addr
 
 -- | tiStats will collect run-time statistics, for now its just number
 -- of steps taken
-data TiStats = TiStep Int
+data TiStats = TiStep { steps :: Int,
+                        prRds :: Int,
+                        scRds :: Int,
+                        maxStk :: Int }
 
 -- | initial stats
 tiStatsInit :: TiStats
-tiStatsInit = TiStep 0
+tiStatsInit = TiStep 0 0 0 0
 
--- | advance one step in tiStats
+-- | increase step counter by one
 tiStatsIncStep :: TiStats -> TiStats
-tiStatsIncStep (TiStep n) = TiStep (n+1)
+tiStatsIncStep (TiStep n x y z) = TiStep (n+1) x y z
 
--- | get current steps from tiStats
-tiStatsGetStep :: TiStats -> Int
-tiStatsGetStep (TiStep n) = n
+-- | increase primitive reduction counter by one
+tiStatsIncPR :: TiStats -> TiStats
+tiStatsIncPR (TiStep x n y z) = TiStep x (n+1) y z
+
+-- | increase supercombinator counter by one
+tiStatsIncSR :: TiStats -> TiStats
+tiStatsIncSR (TiStep x y n z) = TiStep x y (n+1) z
+
+-- | change the value of stored value of max stack depth
+tiStatsChangeMaxStk :: Int -> TiStats -> TiStats
+tiStatsChangeMaxStk n' (TiStep x y z n) = TiStep x y z n'
 
 -- | apply a function to stats in a state to make a new state
 applyToStats :: (TiStats -> TiStats) -> TiState -> TiState
@@ -98,7 +113,11 @@ eval state = state : followingStates
 
 -- | do the administration work between steps
 doAdmin :: TiState -> TiState
-doAdmin = applyToStats tiStatsIncStep
+doAdmin state@(_, _, _, _, stats) = 
+    applyToStats (tiStatsIncStep . tiStatsChangeMaxStk n) state
+        where n | csd > sd = csd | otherwise = sd
+              csd = getStackDepth state
+              sd = maxStk stats
 
 -- | determine if reduction accomplished
 tiFinalState :: TiState -> Bool
@@ -107,7 +126,7 @@ tiFinalState (stack, _, heap, _, _) =
                     [] -> error "empty stack!"
                     stack -> False
 
--- | is this node a pure data node?
+-- | is this node a data node?
 isDataNode :: Node a -> Bool
 isDataNode (NNum _) = True
 isDataNode node = False
@@ -117,7 +136,8 @@ advanceState :: TiState -> TiState
 advanceState state@(addr:stack, dump, heap, globals, stat) =
     case hLookup heap addr of
         NAp a1 a2 -> (a1:addr:stack, dump, heap, globals, stat)
-        NSC name args body -> scStep name args body state 
+        NSC name args body -> applyToStats tiStatsIncSR $
+            scStep name args body state
             -- applying a supercombinator is more complicate, 
             --  a specialized function will dealing with it
         NNum _ -> error "number can not apply to anything"
@@ -173,8 +193,14 @@ pprNode addr heap = cConcat [ cLPNum 3 addr, cStr ": ",
     ]
 
 pprStatsInState :: TiState -> Cseq
-pprStatsInState (_, _, _, _, stats) = 
-    cConcat [   cStr "This program takes ", 
-                cNum . tiStatsGetStep $ stats,
-                cStr " steps." ]
+pprStatsInState (_, _, heap, _, stats) = 
+    cConcat [   cStr "This program takes ", cNum $ steps stats, 
+                cStr " steps, ", cNum $ scRds stats,
+                cStr " supercombinator reductions, and ",
+                cNum . prRds $ stats, cStr " primitive reductions.",
+                cNewline, cStr "There are ", cNum $ hGetAllocTimes heap,
+                cStr ", ", cNum $ hGetUpdateTimes heap, cStr ", ",
+                cNum $ hGetFreeTimes heap, cStr " times of heap ",
+                cStr "allocation, update and free operations.",
+                cNewline, cStr "Max stack depth is ", cNum $ maxStk stats ]
 

@@ -27,6 +27,9 @@ module CoreLanguage.Utility (
     -- ** Heap Query
     , hLookup, hAddresses, hSize
 
+    -- ** Extract statistics
+    , hGetAllocTimes, hGetUpdateTimes, hGetFreeTimes
+
     -- ** tbd
     , hNull, hIsnull
     
@@ -50,53 +53,68 @@ import Data.Bits (shiftL)
 import Data.Map (Map, keys, elems, findWithDefault, 
                     insert, empty, union, fromList)
 
--- | The heap is represented as a tuple, containing
+-- | The heap is represented as a quadruple, containing
 --
 --  * the unused address pool
 --  * the used addresses
 --  * a complete binary search tree 
+--  * an extra part count heap maniputations
 --
 --  every node in the BST in indexed by an address taken out of 
 --  the address pool, since the node index are monotonic when insertBSTed
 --  in the BST, the tree is also balanced. The following functions are
 --  all from A.1.1 in appendix, but implementation differently, and 
 --  @showaddr@ is not needed since @Addr@ is a type synonym of @Int@.
-type Heap a = ([Addr], [Addr], BST Addr a)
+type Heap a = ([Addr], [Addr], BST Addr a, (Int, Int, Int))
 
 -- | address are represented as numbers
 type Addr = Int
 
 -- | an initialised empty heap
 hInitial :: Heap a
-hInitial = ([1..], [], emptyBST)
+hInitial = ([1..], [], emptyBST, (0, 0, 0))
 
 -- | allocate an object in heap and return the address and new heap
 hAlloc :: Heap a -> a -> (Heap a, Addr)
-hAlloc (addr:ap, uap, tree) node = 
-    ((ap, addr:uap, insertBST addr node tree), addr)
+hAlloc (addr:ap, uap, tree, (al, ud, fr)) node = 
+    ((ap, addr:uap, insertBST addr node tree, (al+1, ud, fr)), addr)
 
 -- | update an object at specific address
 hUpdate :: Heap a -> Addr -> a -> Heap a
-hUpdate (ap, uap, tree) addr node = (ap, uap, updateBST addr node tree)
+hUpdate (ap, uap, tree, (al, ud, fr)) addr node = 
+    (ap, uap, updateBST addr node tree, (al, ud+1, fr))
 
 -- | remove a specific object, for now it only changes address pool
 hFree :: Heap a -> Addr -> Heap a
-hFree (ap, uap, tree) addr = (addr:ap, del addr uap, tree)
-    where del x0 (x:xs)
-            | x0 == x = xs
-            | otherwise = del x0 xs
+hFree (ap, uap, tree, (al, ud ,fr)) addr = 
+    (addr:ap, del addr uap, tree, (al, ud, fr+1))
+        where del x0 (x:xs)
+                | x0 == x = xs
+                | otherwise = del x0 xs
 
 -- | look for an object in the heap
 hLookup :: Heap a -> Addr -> a
-hLookup (_, _, tree) addr = findInBST addr tree
+hLookup (_, _, tree, _) addr = findInBST addr tree
 
 -- | return addresses of all objects in the heap
 hAddresses :: Heap a -> [Addr]
-hAddresses (_, uap, _) = uap
+hAddresses (_, uap, _, _) = uap
 
 -- | return the number of objects in the heap
 hSize :: Heap a -> Int
-hSize (_, _, tree) = sizeOfBST tree
+hSize (_, _, tree, _) = sizeOfBST tree
+
+-- | get the number of allocation had been applied to this heap
+hGetAllocTimes :: Heap a -> Int
+hGetAllocTimes (_, _, _, (n, _, _)) = n
+
+-- | get the number of updates had been applied to this heap
+hGetUpdateTimes :: Heap a -> Int
+hGetUpdateTimes (_, _, _, (_, n, _)) = n 
+
+-- | get the number of free operation had been applied to this heap
+hGetFreeTimes :: Heap a -> Int
+hGetFreeTimes (_, _, _, (_, _, n)) = n 
 
 -- | @hNull@ is an address guaranteed to differ from every address 
 -- returned by @hAlloc@
