@@ -113,9 +113,8 @@ eval state = state : followingStates
 
 -- | do the administration work between steps
 doAdmin :: TiState -> TiState
-doAdmin state@(_, _, _, _, stats) = 
-    applyToStats (tiStatsIncStep . tiStatsChangeMaxStk n) state
-        where n | csd > sd = csd | otherwise = sd
+doAdmin state@(_, _, _, _, stats) = applyToStats (tiStatsIncStep . f) state
+        where f | csd < sd = id | otherwise = tiStatsChangeMaxStk csd
               csd = getStackDepth state
               sd = maxStk stats
 
@@ -151,17 +150,6 @@ scStep sc args body (addr:stack, dump, heap, globals, stat) =
               (newHeap, iScAddr) = 
                   instantiate body heap (aCombine argList globals)
                 
--- | instantiate a supercombinator, tranvers its body expression and put all
--- nodes in heap
-instantiate :: CoreExpr -> TiHeap -> TiGlobal -> (TiHeap, Addr)
-instantiate expr heap varList = case expr of 
-    ENum num -> hAlloc heap (NNum num)
-    EVar var -> (heap, aLookup varList var 
-        (error $ "can't find defination of variable "++var))
-    EAp f x -> hAlloc heap2 $ NAp addr1 addr2
-        where (heap1, addr1) = instantiate f heap varList
-              (heap2, addr2) = instantiate x heap1 varList
-
 -- | take all arguments needed for instantiation from the stack, the name
 -- of supercombinator are also needed for comprehensive error message
 getArgs :: Name -> [Name] -> TiStack -> TiHeap -> (TiStack, TiGlobal)
@@ -172,7 +160,40 @@ getArgs sc (name:args) (addr:stack) heap = (newStack, argList')
           NAp _ operand = hLookup heap addr
           (newStack, argList) = getArgs sc args stack heap
 
------------------------------------------------------------------------------
+-- | instantiate an expression, tranvers it to substitude all local and 
+-- global bindings (packed in @varList@ argument) and put all nodes in heap
+instantiate :: CoreExpr -> TiHeap -> TiGlobal -> (TiHeap, Addr)
+instantiate expr heap varList = case expr of 
+    ENum num -> hAlloc heap (NNum num)
+    EVar var -> (heap, aLookup varList var 
+        (error $ "can't find defination of variable "++var))
+    EAp f x -> hAlloc heap2 $ NAp addr1 addr2
+        where (heap1, addr1) = instantiate f heap varList
+              (heap2, addr2) = instantiate x heap1 varList
+    EConstr tag arity -> error "Can't instantiate data constructor yet."
+    ELet flag defs body -> instantiateLet flag defs body heap varList
+    ELam vars body -> error "Can't instantiate lambda expression yet."
+
+-- | instantiate let binding
+instantiateLet ::   IsRec -> [(Name, CoreExpr)] -> CoreExpr 
+               ->   TiHeap -> TiGlobal -> (TiHeap, Addr)
+instantiateLet isRec defs body heap varList = instantiate body newHeap env
+        where env = localEnv `aCombine` varList
+              (newHeap, localEnv) = instantiateDefs isRec defs heap varList
+
+-- | instantiate a list of variable bindings, put their body in heap and 
+-- attach their name-address list to the enviroment
+instantiateDefs ::  IsRec -> [(Name, CoreExpr)] -> TiHeap -> TiGlobal
+                ->  (TiHeap, TiGlobal)
+instantiateDefs isRec defs heap varList = (newHeap, env)
+    where (newHeap, localDefs) = mapAccuml allocDef heap defs
+          env = aFromList localDefs `aCombine` varList
+          allocDef h (name, expr) = (hn, (name, addr))
+            where (hn, addr)
+                    | nonRecursive = instantiate expr h varList
+                    | recursive = instantiate expr h (env `aCombine` varList)
+
+------------------------------------------------------------------------------
 
 -- | Extract informations and format them for printing, exploiting string
 -- container defined in Base module

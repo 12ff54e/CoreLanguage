@@ -290,7 +290,7 @@ pprFAExpr pcd (EAp (EAp (EVar op) x) y)
         where opPcd
                 | op `elem` ["*","/"] = 5
                 | op `elem` ["+","-"] = 4
-                | op `elem` ["==","~=",">",">=","<","<="] = 3
+                | op `elem` ["==","/=",">",">=","<","<="] = 3
                 | op == "&" = 2
                 | op == "|" = 1
                 | otherwise = 6
