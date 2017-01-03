@@ -167,7 +167,8 @@ cEmpty = CNil
 -- | put a string in the container, and subsititute line break
 -- to @cNewLine@
 cStr :: String -> Cseq
-cStr = cIntercalate cNewline .  map CStr . lines 
+cStr "" = CNil
+cStr s = cIntercalate cNewline .  map CStr . lines $ s
 
 -- | put a connection request in a container
 cAppend :: Cseq -> Cseq -> Cseq
