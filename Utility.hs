@@ -198,6 +198,7 @@ updateBST key obj (BinNode size k o lc rc) =
       EQ -> BinNode size k obj lc rc
 
 findInBST :: Ord k => k -> BST k a -> a
+findInBST _ Tip = error "the key did not in the BST"
 findInBST key (BinNode size k o lc rc) = 
     case compare key k of 
       LT -> findInBST key lc

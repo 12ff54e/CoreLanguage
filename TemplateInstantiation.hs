@@ -78,6 +78,7 @@ applyToStats f (s, d, h, g, ss) = (s, d, h, g, f ss)
 data Node a = NAp Addr Addr
             | NSC Name [a] (Expr a)
             | NNum Int
+            | NInd Addr
     deriving Show
 
 -- | @run@ the program, takes source code and gives its output. It is a 
@@ -140,15 +141,18 @@ advanceState state@(addr:stack, dump, heap, globals, stat) =
             -- applying a supercombinator is more complicate, 
             --  a specialized function will dealing with it
         NNum _ -> error "number can not apply to anything"
+        NInd aInd -> (aInd:stack, dump, heap, globals, stat)
 
 -- | a function advancing one step when the head of stack points to
 -- a supercombinator
 scStep :: Name -> [Name] -> CoreExpr -> TiState -> TiState
-scStep sc args body (addr:stack, dump, heap, globals, stat) =
-    (iScAddr:newStack, dump, newHeap, globals, stat)
-        where (newStack, argList) = getArgs sc args stack heap
+scStep sc args body (stack, dump, heap, globals, stat) =
+    (iScAddr:newStack, dump, newHeap', globals, stat)
+        where (newStack, argList) = getArgs sc args (tail stack) heap
               (newHeap, iScAddr) = 
                   instantiate body heap (aCombine argList globals)
+              newHeap' = 
+                  hUpdate newHeap (stack!! length args) (NInd iScAddr)
                 
 -- | take all arguments needed for instantiation from the stack, the name
 -- of supercombinator are also needed for comprehensive error message
@@ -211,6 +215,7 @@ pprNode addr heap = cConcat [ cLPNum 3 addr, cStr ": ",
       NAp a1 a2 -> cConcat [ cStr "NAp", cLPNum 4 a1, cLPNum 4 a2 ]
       NSC sc _ _ -> cStr "NSC " `cAppend` cStr sc
       NNum num -> cStr "NNum " `cAppend` cNum num
+      NInd addr -> cStr "NInd" `cAppend` cLPNum 4 addr
     ]
 
 pprStatsInState :: TiState -> Cseq
