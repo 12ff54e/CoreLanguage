@@ -147,12 +147,11 @@ advanceState state@(addr:stack, dump, heap, globals, stat) =
 -- a supercombinator
 scStep :: Name -> [Name] -> CoreExpr -> TiState -> TiState
 scStep sc args body (stack, dump, heap, globals, stat) =
-    (iScAddr:newStack, dump, newHeap', globals, stat)
+    (iScAddr:newStack, dump, newHeap, globals, stat)
         where (newStack, argList) = getArgs sc args (tail stack) heap
-              (newHeap, iScAddr) = 
-                  instantiate body heap (aCombine argList globals)
-              newHeap' = 
-                  hUpdate newHeap (stack!! length args) (NInd iScAddr)
+              iScAddr = stack !! length args
+              newHeap = instantiateAndUpdate 
+                body iScAddr heap (argList `aCombine` globals)
                 
 -- | take all arguments needed for instantiation from the stack, the name
 -- of supercombinator are also needed for comprehensive error message
@@ -177,6 +176,18 @@ instantiate expr heap varList = case expr of
     EConstr tag arity -> error "Can't instantiate data constructor yet."
     ELet flag defs body -> instantiateLet flag defs body heap varList
     ELam vars body -> error "Can't instantiate lambda expression yet."
+
+instantiateAndUpdate :: CoreExpr -> Addr -> TiHeap -> TiGlobal -> TiHeap
+instantiateAndUpdate expr addr heap varList = case expr of
+    ENum num -> hUpdate heap addr (NNum num)
+    EVar var -> hUpdate heap addr (NInd $ aLookup varList var 
+        (error $ "can't find defination of variable "++var))
+    EAp f x -> hUpdate heap2 addr $ NAp addr1 addr2
+        where (heap1, addr1) = instantiate f heap varList
+              (heap2, addr2) = instantiate x heap1 varList
+    EConstr tag arity -> undefined
+    ELet flag defs body -> undefined
+    ELam vars body -> undefined
 
 -- | instantiate let binding
 instantiateLet ::   IsRec -> [(Name, CoreExpr)] -> CoreExpr 
