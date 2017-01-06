@@ -43,8 +43,9 @@ type TiHeap      = Heap (Node Name)
 -- to address
 type TiGlobal    = Assocs Name Addr
 
--- | tiStats will collect run-time statistics, for now its just number
--- of steps taken
+-- | tiStats will collect run-time statistics, for now it accumulates
+-- total step taken, reductions(split to spercombinator reductions and
+-- primitive reductions) and max stack depth
 data TiStats = TiStep { steps :: Int,
                         prRds :: Int,
                         scRds :: Int,
@@ -139,7 +140,7 @@ advanceState state@(addr:stack, dump, heap, globals, stat) =
         NSC name args body -> applyToStats tiStatsIncSR $
             scStep name args body state
             -- applying a supercombinator is more complicate, 
-            --  a specialized function will dealing with it
+            --  a specialized function will deal with it
         NNum _ -> error "number can not apply to anything"
         NInd aInd -> (aInd:stack, dump, heap, globals, stat)
 
@@ -177,6 +178,7 @@ instantiate expr heap varList = case expr of
     ELet flag defs body -> instantiateLet flag defs body heap varList
     ELam vars body -> error "Can't instantiate lambda expression yet."
 
+-- | instantiate an expression and use it to update given the node
 instantiateAndUpdate :: CoreExpr -> Addr -> TiHeap -> TiGlobal -> TiHeap
 instantiateAndUpdate expr addr heap varList = case expr of
     ENum num -> hUpdate heap addr (NNum num)
@@ -186,13 +188,21 @@ instantiateAndUpdate expr addr heap varList = case expr of
         where (heap1, addr1) = instantiate f heap varList
               (heap2, addr2) = instantiate x heap1 varList
     EConstr tag arity -> undefined
-    ELet flag defs body -> undefined
+    ELet flag defs body -> 
+        instantiateAndUpdateLet flag defs body addr heap varList
     ELam vars body -> undefined
 
 -- | instantiate let binding
 instantiateLet ::   IsRec -> [(Name, CoreExpr)] -> CoreExpr 
                ->   TiHeap -> TiGlobal -> (TiHeap, Addr)
 instantiateLet isRec defs body heap varList = instantiate body newHeap env
+        where env = localEnv `aCombine` varList
+              (newHeap, localEnv) = instantiateDefs isRec defs heap varList
+
+instantiateAndUpdateLet :: IsRec -> [(Name, CoreExpr)] -> CoreExpr
+                        -> Addr -> TiHeap -> TiGlobal -> TiHeap
+instantiateAndUpdateLet isRec defs body addr heap varList = 
+    instantiateAndUpdate body addr newHeap env
         where env = localEnv `aCombine` varList
               (newHeap, localEnv) = instantiateDefs isRec defs heap varList
 
