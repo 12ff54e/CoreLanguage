@@ -24,24 +24,25 @@ import CoreLanguage.Utility
 
 -- | The state is a quadruple(in theory), here a extra element for run-time
 -- performance statistics collection is added.
-type TiState     = (TiStack, TiDump, TiHeap, TiGlobal, TiStats)
+type TiState    = (TiStack, TiDump, TiHeap, TiGlobal, TiStats)
 
 -- | collect addresses of nodes to be reduced
-type TiStack     = [Addr]
+type TiStack    = [Addr]
 
 getStackDepth :: TiState -> Int
 getStackDepth (stack, _, _, _, _) = length stack
 
-data TiDump      = DummyType
+-- | dump is a stack of stack
+type TiDump     = [TiStack]
 
 -- | store all supercombinators (in the beginning) and every expression
 -- node (gradually added during evaluation, more specifically, in the 
 -- process of instantiation)
-type TiHeap      = Heap (Node Name)
+type TiHeap     = Heap (Node Name)
 
 -- | a list providing effective query(/O(log n)) from supercombinator
 -- to address
-type TiGlobal    = Assocs Name Addr
+type TiGlobal   = Assocs Name Addr
 
 -- | tiStats will collect run-time statistics, for now it accumulates
 -- total step taken, reductions(split to spercombinator reductions and
@@ -80,7 +81,16 @@ data Node a = NAp Addr Addr
             | NSC Name [a] (Expr a)
             | NNum Int
             | NInd Addr
-    deriving Show
+            | NPrim Name Primitive
+                 -- ^ the @Name@ field is just for debugging
+
+-- | the primitive operations, served for pattern matching in
+-- primitive instantiation
+data Primitive = Neg | Add | Sub | Mul | Div 
+    deriving Enum
+
+prDefs :: [(Name, Primitive)]
+prDefs = zip ["negate", "+", "-", "*", "/"] [(Neg)..]
 
 -- | @run@ the program, takes source code and gives its output. It is a 
 -- composition of parser, compiler, evaluator and showing-the-result.
@@ -90,7 +100,7 @@ run = showResult . eval . compile . parse
 -- | transform @CoreProgram@ data structure into initial state
 compile :: CoreProgram -> TiState
 compile cp = ([mainAddr], initDump, initHeap, globals, tiStatsInit)
-    where initDump = undefined
+    where initDump = []
           (initHeap, globals) = buildInitialHeap scDefs
           mainAddr = aLookup globals "main" (error "main is not defined")
           scDefs = cp ++ preludeDefs
@@ -98,11 +108,14 @@ compile cp = ([mainAddr], initDump, initHeap, globals, tiStatsInit)
 -- | use supercombinators to build initial heap, and assign their name to 
 -- addresses in the heap in globals
 buildInitialHeap :: [CoreScDef] -> (TiHeap, TiGlobal)
-buildInitialHeap scDefs = (heap, globals)
-    where globals = aFromList globalsTmp
-          (heap, globalsTmp) = mapAccuml allocateSc hInitial scDefs
-          allocateSc h (name, args, body) = (hn, (name, addr))
-              where (hn, addr) = hAlloc h (NSC name args body)
+buildInitialHeap scDefs = (heap2, globals)
+    where globals = aFromList $ globalsTmp1 ++ globalsTmp2
+          (heap1, globalsTmp1) = mapAccuml allocateSc hInitial scDefs
+          (heap2, globalsTmp2) = mapAccuml allocatePr heap1 prDefs
+          allocateSc h (name, args, body) = let 
+            (hn, addr) = hAlloc h (NSC name args body) in (hn, (name, addr))
+          allocatePr h (name, prim) = let
+            (hn, addr) = hAlloc h (NPrim name prim) in (hn, (name, addr))
 
 -----------------------------------------------------------------------------
 
@@ -122,8 +135,9 @@ doAdmin state@(_, _, _, _, stats) = applyToStats (tiStatsIncStep . f) state
 
 -- | determine if reduction accomplished
 tiFinalState :: TiState -> Bool
-tiFinalState (stack, _, heap, _, _) = 
-    case stack of   [soleAddr] -> isDataNode $ hLookup heap soleAddr
+tiFinalState (stack, dump, heap, _, _) = 
+    case stack of   [soleAddr] -> null dump &&
+                        (isDataNode $ hLookup heap soleAddr)
                     [] -> error "empty stack!"
                     stack -> False
 
@@ -141,8 +155,11 @@ advanceState state@(addr:stack, dump, heap, globals, stat) =
             scStep name args body state
             -- applying a supercombinator is more complicate, 
             --  a specialized function will deal with it
-        NNum _ -> error "number can not apply to anything"
+        NNum _ -> numStep state
         NInd aInd -> (aInd:stack, dump, heap, globals, stat)
+        NPrim name primitive -> applyToStats tiStatsIncPR $
+            prStep name primitive state
+            -- applying a primitive also needs an auxiliary function
 
 -- | a function advancing one step when the head of stack points to
 -- a supercombinator
@@ -199,6 +216,7 @@ instantiateLet isRec defs body heap varList = instantiate body newHeap env
         where env = localEnv `aCombine` varList
               (newHeap, localEnv) = instantiateDefs isRec defs heap varList
 
+-- | instantiate let binding and update the heap with it
 instantiateAndUpdateLet :: IsRec -> [(Name, CoreExpr)] -> CoreExpr
                         -> Addr -> TiHeap -> TiGlobal -> TiHeap
 instantiateAndUpdateLet isRec defs body addr heap varList = 
@@ -217,6 +235,32 @@ instantiateDefs isRec defs heap varList = (newHeap, env)
             where (hn, addr)
                     | nonRecursive = instantiate expr h varList
                     | recursive = instantiate expr h (env `aCombine` varList)
+
+numStep :: TiState -> TiState
+numStep ([addr], dump, heap, globals, stats) = 
+    case dump of
+      [] -> error "number can not apply to anything."
+      [unaryOp, ap]:dump -> ([unaryOp, ap], dump, newHeap, globals, stats)
+        where newHeap = hUpdate heap ap (NAp unaryOp addr)
+      [binOp, ap1, ap2]:dump -> undefined
+
+-- | a function advancing one step when the head of stack points to 
+-- a primitive operation
+prStep :: Name -> Primitive -> TiState -> TiState
+prStep name primitive state = case primitive of 
+    Neg -> primNeg state
+    Add -> primArith name (+) state
+
+primNeg :: TiState -> TiState
+primNeg (prim:[ap], dump, heap, globals, stats) = 
+    case hLookup heap operand of
+      NNum num -> ([ap], dump, hUpdate heap ap (NNum (-num)), globals, stats)
+      node -> ([operand], [prim, ap]:dump, heap, globals, stats)
+    where NAp _ operand = hLookup heap ap
+
+primArith :: Name -> (Int -> Int -> Int) -> TiState -> TiState
+primArith name func (prim:[ap1,ap2], dump, heap, global, stats) = undefined
+
 
 ------------------------------------------------------------------------------
 
@@ -237,6 +281,7 @@ pprNode addr heap = cConcat [ cLPNum 3 addr, cStr ": ",
       NSC sc _ _ -> cStr "NSC " `cAppend` cStr sc
       NNum num -> cStr "NNum " `cAppend` cNum num
       NInd addr -> cStr "NInd" `cAppend` cLPNum 4 addr
+      NPrim prim _ -> cStr "NPrim " `cAppend` cStr prim
     ]
 
 pprStatsInState :: TiState -> Cseq
