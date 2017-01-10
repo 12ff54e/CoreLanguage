@@ -35,6 +35,9 @@ getStackDepth (stack, _, _, _, _) = length stack
 -- | dump is a stack of stack
 type TiDump     = [TiStack]
 
+getDumpDepth :: TiState -> Int
+getDumpDepth (_, dump, _, _, _) = length dump
+
 -- | store all supercombinators (in the beginning) and every expression
 -- node (gradually added during evaluation, more specifically, in the 
 -- process of instantiation)
@@ -50,27 +53,32 @@ type TiGlobal   = Assocs Name Addr
 data TiStats = TiStep { steps :: Int,
                         prRds :: Int,
                         scRds :: Int,
-                        maxStk :: Int }
+                        maxStk :: Int,
+                        maxDmp :: Int }
 
 -- | initial stats
 tiStatsInit :: TiStats
-tiStatsInit = TiStep 0 0 0 0
+tiStatsInit = TiStep 0 0 0 0 0
 
 -- | increase step counter by one
 tiStatsIncStep :: TiStats -> TiStats
-tiStatsIncStep (TiStep n x y z) = TiStep (n+1) x y z
+tiStatsIncStep (TiStep n x y z w) = TiStep (n+1) x y z w
 
 -- | increase primitive reduction counter by one
 tiStatsIncPR :: TiStats -> TiStats
-tiStatsIncPR (TiStep x n y z) = TiStep x (n+1) y z
+tiStatsIncPR (TiStep x n y z w) = TiStep x (n+1) y z w
 
 -- | increase supercombinator counter by one
 tiStatsIncSR :: TiStats -> TiStats
-tiStatsIncSR (TiStep x y n z) = TiStep x y (n+1) z
+tiStatsIncSR (TiStep x y n z w) = TiStep x y (n+1) z w
 
 -- | change the value of stored value of max stack depth
 tiStatsChangeMaxStk :: Int -> TiStats -> TiStats
-tiStatsChangeMaxStk n' (TiStep x y z n) = TiStep x y z n'
+tiStatsChangeMaxStk n' (TiStep x y z n w) = TiStep x y z n' w
+
+-- | change the value of stored value of max dump depth
+tiStatsChangeMaxDmp :: Int -> TiStats -> TiStats
+tiStatsChangeMaxDmp n' (TiStep x y z w n) = TiStep x y z w n'
 
 -- | apply a function to stats in a state to make a new state
 applyToStats :: (TiStats -> TiStats) -> TiState -> TiState
@@ -128,10 +136,13 @@ eval state = state : followingStates
 
 -- | do the administration work between steps
 doAdmin :: TiState -> TiState
-doAdmin state@(_, _, _, _, stats) = applyToStats (tiStatsIncStep . f) state
+doAdmin state@(_, _, _, _, stats) = applyToStats (tiStatsIncStep.f.g) state
         where f | csd < sd = id | otherwise = tiStatsChangeMaxStk csd
+              g | cdd < dd = id | otherwise = tiStatsChangeMaxDmp cdd
               csd = getStackDepth state
               sd = maxStk stats
+              cdd = getDumpDepth state
+              dd = maxDmp stats
 
 -- | determine if reduction accomplished
 tiFinalState :: TiState -> Bool
@@ -150,7 +161,7 @@ isDataNode node = False
 advanceState :: TiState -> TiState
 advanceState state@(addr:stack, dump, heap, globals, stat) =
     case hLookup heap addr of
-        NAp a1 a2 -> (a1:addr:stack, dump, heap, globals, stat)
+        NAp a1 a2 -> apStep a1 a2 state
         NSC name args body -> applyToStats tiStatsIncSR $
             scStep name args body state
             -- applying a supercombinator is more complicate, 
@@ -160,6 +171,16 @@ advanceState state@(addr:stack, dump, heap, globals, stat) =
         NPrim name primitive -> applyToStats tiStatsIncPR $
             prStep name primitive state
             -- applying a primitive also needs an auxiliary function
+
+-- | a function advancing one step when the head of stack points to 
+-- a function application node, it will check the operand in case it being
+-- a indirection node
+apStep :: Addr -> Addr -> TiState -> TiState
+apStep a1 a2 (stack, dump, heap, globals, stats) = 
+    (a1:stack, dump, newHeap, globals, stats)
+        where newHeap = case hLookup heap a2 of 
+                NInd addr -> hUpdate heap (head stack) (NAp a1 addr)
+                node -> heap
 
 -- | a function advancing one step when the head of stack points to
 -- a supercombinator
@@ -236,31 +257,41 @@ instantiateDefs isRec defs heap varList = (newHeap, env)
                     | nonRecursive = instantiate expr h varList
                     | recursive = instantiate expr h (env `aCombine` varList)
 
+-- | check the dump to determine throwing error or recovering stack
 numStep :: TiState -> TiState
 numStep ([addr], dump, heap, globals, stats) = 
     case dump of
       [] -> error "number can not apply to anything."
-      [unaryOp, ap]:dump -> ([unaryOp, ap], dump, newHeap, globals, stats)
+      [unaryOp,ap]:dump -> ([unaryOp, ap], dump, newHeap, globals, stats)
         where newHeap = hUpdate heap ap (NAp unaryOp addr)
-      [binOp, ap1, ap2]:dump -> undefined
+      [binOp,ap1,ap2]:dump -> ([binOp,ap1,ap2], dump, newHeap, globals, stats)
+        where newHeap = hUpdate heap ap1 (NAp binOp addr)
 
 -- | a function advancing one step when the head of stack points to 
 -- a primitive operation
 prStep :: Name -> Primitive -> TiState -> TiState
 prStep name primitive state = case primitive of 
-    Neg -> primNeg state
+    Neg -> primUnary negate state
     Add -> primArith name (+) state
+    Sub -> primArith name (-) state
+    Mul -> primArith name (*) state
+    Div -> primArith name div state
 
-primNeg :: TiState -> TiState
-primNeg (prim:[ap], dump, heap, globals, stats) = 
+primUnary :: (Int -> Int) -> TiState -> TiState
+primUnary func (prim:[ap], dump, heap, globals, stats) = 
     case hLookup heap operand of
-      NNum num -> ([ap], dump, hUpdate heap ap (NNum (-num)), globals, stats)
-      node -> ([operand], [prim, ap]:dump, heap, globals, stats)
+      NNum num -> 
+          ([ap], dump, hUpdate heap ap (NNum (func num)), globals, stats)
+      node -> ([operand], [prim,ap]:dump, heap, globals, stats)
     where NAp _ operand = hLookup heap ap
 
 primArith :: Name -> (Int -> Int -> Int) -> TiState -> TiState
-primArith name func (prim:[ap1,ap2], dump, heap, global, stats) = undefined
-
+primArith name func (prim:[ap1,ap2], dump, heap, globals, stats) = 
+    case hLookup heap operand of
+      NNum num -> primUnary (func num) 
+        ([ap1,ap2], dump, heap, globals, stats)
+      node -> ([operand], [prim,ap1,ap2]:dump, heap, globals, stats)
+    where NAp _ operand = hLookup heap ap1
 
 ------------------------------------------------------------------------------
 
@@ -285,14 +316,21 @@ pprNode addr heap = cConcat [ cLPNum 3 addr, cStr ": ",
     ]
 
 pprStatsInState :: TiState -> Cseq
-pprStatsInState (_, _, heap, _, stats) = 
-    cConcat [   cStr "This program takes ", cNum $ steps stats, 
-                cStr " steps, ", cNum $ scRds stats,
-                cStr " supercombinator reductions, and ",
-                cNum . prRds $ stats, cStr " primitive reductions.",
-                cNewline, cStr "There are ", cNum $ hGetAllocTimes heap,
-                cStr ", ", cNum $ hGetUpdateTimes heap, cStr ", ",
-                cNum $ hGetFreeTimes heap, cStr " times of heap ",
-                cStr "allocation, update and free operations.",
-                cNewline, cStr "Max stack depth is ", cNum $ maxStk stats ]
+pprStatsInState (_, _, heap, _, stats) = cConcat 
+    [   cStr "This program takes ", cNum $ steps stats, 
+        cStr " steps, including", cNewline, cStr $ space 4, 
+        cIndent reductions, cNewline, 
+        cStr "There are ", cIndent heapOps, cNewline, 
+        cStr "Max stack depth is ", cNum $ maxStk stats, cNewline, 
+        cStr "Max dump depth is ", cNum $ maxDmp stats ]
+        where reductions = cConcat 
+                [   cNum $ scRds stats, 
+                    cStr " supercombinator reductions;", cNewline, 
+                    cNum $ prRds stats, cStr " primitive reductions." ]
+              heapOps = cConcat 
+                [   cNum $ hGetAllocTimes heap, cStr " heap allocations", 
+                    cNewline, cNum $ hGetUpdateTimes heap, 
+                    cStr " heap updates", cNewline, 
+                    cNum $ hGetFreeTimes heap, cStr " heap free operations" ]
+                
 
