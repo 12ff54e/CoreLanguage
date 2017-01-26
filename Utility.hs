@@ -39,7 +39,7 @@ module CoreLanguage.Utility (
     , Assocs(..)
     
     -- ** Associate list Construction
-    , aCombine, aInsert, aEmpty, aFromList
+    , aCombine, aInsert, aEmpty, aFromList, aToList
 
     -- ** Associate list Query
     , aDomain, aRange, aLookup
@@ -51,7 +51,7 @@ module CoreLanguage.Utility (
 
 import Data.Bits (shiftL)
 import Data.Map (Map, keys, elems, findWithDefault, 
-                    insert, empty, union, fromList)
+                    insert, empty, union, fromList, toList)
 
 -- | The heap is represented as a quadruple, containing
 --
@@ -152,11 +152,15 @@ aCombine = union
 
 -- | insert a pair of key-value in to assoc list
 aInsert :: Ord k => (k,v) -> Assocs k v -> Assocs k v
-aInsert (k,v) al = insert k v al
+aInsert (k, v) = insert k v
 
 -- | convert a list of key-value pair into assocs list
 aFromList :: Ord k => [(k,v)] -> Assocs k v
 aFromList = fromList
+
+-- | convert a assocs list into a list of pairs
+aToList :: Ord k => Assocs k v -> [(k,v)]
+aToList = toList
 
 -----------------------------------------------------------------------
 
