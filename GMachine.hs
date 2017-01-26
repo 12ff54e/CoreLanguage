@@ -26,20 +26,23 @@ type GmState = (GmCode, GmStack, GmHeap, GmGlobals, GmStats)
 -- | GmCode is a sequence of instructions
 type GmCode = [Instruction]
 
--- | There are six instructions
+-- | There are seven instructions
 --
 --  * @PushGlobal name@ push the address of the given supercombinator in stack
 --  * @Push n@ take a copy of \n\th argument which passed to a function
 --  * @PushInt num@ places an integer node in heap
 --  * @Mkap@ take top two addresses in stack and make them 
 --      a function application
---  * @Slide num@ tidy up the stack after instantiation of a supercombinator
---  * @Unwind@  
+--  * @Update n@ updates the root node to an indirection node pointing to 
+--      the newly instanted supercombinator
+--  * @Pop n@ simply pops n items off the stack
+--  * @Unwind@ 
 data Instruction    = PushGlobal Name
                     | Push Int
                     | PushInt Int 
                     | Mkap
-                    | Slide Int
+                    | Update Int
+                    | Pop Int
                     | Unwind
     deriving (Eq, Show)
 
@@ -70,6 +73,7 @@ putHeap h' (c, sk, h, g, ss) = (c, sk, h', g, ss)
 data Node   = NAp Addr Addr
             | NNum Int
             | NGlobal Int GmCode
+            | NInd Int
 
 type GmGlobals = Assocs Name Addr
 
@@ -117,7 +121,8 @@ compile prog = (initialCode, [], initialHeap, globals, gmStatsInit)
 
 compileSc :: CoreScDef -> (Name, Int, GmCode)
 compileSc (name, args, body) = (name, scArity, code)
-    where code = compileExpr 0 args body ++ [Slide (scArity+1), Unwind]
+    where code = compileExpr 0 args body ++ 
+            [Update scArity, Pop scArity, Unwind]
           scArity = length args
 
 compileExpr :: Int -> [Name] -> CoreExpr -> GmCode
@@ -186,8 +191,9 @@ advanceStep state =
                     a1:a2:stack' = stack
                     newStack = addr:stack'
                 in putStack newStack $ putHeap newHeap newState
-        Slide n -> let (a:as) = stack
-                   in putStack (a : drop n as) newState
+        Update n -> putStack (tail stack) $ putHeap 
+            (hUpdate heap (stack !! (n+1)) (NInd $ head stack)) newState
+        Pop n -> putStack (drop n stack) newState
         Unwind -> unwind newState
 
 unwind :: GmState -> GmState
@@ -197,7 +203,8 @@ unwind state = case hLookup heap addr of
     NGlobal n code
         | length stack < n -> error "not enough arguments"
         | otherwise -> putCode code $ putStack stack state
-    where stack@(addr:_) = getStack state
+    NInd aInd -> putCode [Unwind] $ putStack (aInd:as) state
+    where stack@(addr:as) = getStack state
           heap = getHeap state
 
 ------------------------------------------------------------------------------
@@ -241,6 +248,7 @@ pprNode addr heap globals = cConcat [ cLPNum 3 addr, cStr " -> ",
         NGlobal _ _ -> let name:_ = [ n | (n,a) <- aToList globals, a==addr]
                        in cStr ("Supercombinator "++name)
         NNum num -> cStr "Num " `cAppend` cNum num
+        NInd addr -> cStr "Indirection to " `cAppend` cNum addr
     ]
 
 pprStatistics :: GmState -> Cseq
