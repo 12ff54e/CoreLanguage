@@ -251,7 +251,7 @@ pprScDef (var,vars,expr) =
 --  *       6       Application
 --  *       5       *,/
 --  *       4       +,-
---  *       3       ==,~=,>,>=,<,<=
+--  *       3       ==,/=,>,>=,<,<=
 --  *       2       &
 --  *       1       |
 pprExpr :: CoreExpr -> Cseq
