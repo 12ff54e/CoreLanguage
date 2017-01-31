@@ -71,12 +71,12 @@ isTwoCharOp, isComment :: String -> Bool
 isTwoCharOp = (`elem` ["==","<=",">=","/=","->"])
 isComment = (== "--")
 
----------------------------------------------------------
+------------------------------------------------------------------------------
 -- Auxiliary functions for syntax analyser
 
 -- Reserved words and symbols
 keywords :: [String]
-keywords = ["let","letrec","in","case","of","Pack"]
+keywords = [ "let", "letrec", "in", "case", "of", "Pack" ]
 
 -- infix operator with precedence from 1 to 5, and
 -- function application has precedence 6

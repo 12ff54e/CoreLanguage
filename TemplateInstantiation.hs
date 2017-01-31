@@ -54,31 +54,35 @@ data TiStats = TiStep { steps :: Int,
                         prRds :: Int,
                         scRds :: Int,
                         maxStk :: Int,
-                        maxDmp :: Int }
+                        maxDmp :: Int,
+                        output :: [Int] }
 
 -- | initial stats
 tiStatsInit :: TiStats
-tiStatsInit = TiStep 0 0 0 0 0
+tiStatsInit = TiStep 0 0 0 0 0 []
 
 -- | increase step counter by one
 tiStatsIncStep :: TiStats -> TiStats
-tiStatsIncStep (TiStep n x y z w) = TiStep (n+1) x y z w
+tiStatsIncStep (TiStep n x y z w v) = TiStep (n+1) x y z w v
 
 -- | increase primitive reduction counter by one
 tiStatsIncPR :: TiStats -> TiStats
-tiStatsIncPR (TiStep x n y z w) = TiStep x (n+1) y z w
+tiStatsIncPR (TiStep x n y z w v) = TiStep x (n+1) y z w v
 
 -- | increase supercombinator counter by one
 tiStatsIncSR :: TiStats -> TiStats
-tiStatsIncSR (TiStep x y n z w) = TiStep x y (n+1) z w
+tiStatsIncSR (TiStep x y n z w v) = TiStep x y (n+1) z w v
 
 -- | change the value of stored value of max stack depth
 tiStatsChangeMaxStk :: Int -> TiStats -> TiStats
-tiStatsChangeMaxStk n' (TiStep x y z n w) = TiStep x y z n' w
+tiStatsChangeMaxStk n' (TiStep x y z n w v) = TiStep x y z n' w v
 
 -- | change the value of stored value of max dump depth
 tiStatsChangeMaxDmp :: Int -> TiStats -> TiStats
-tiStatsChangeMaxDmp n' (TiStep x y z w n) = TiStep x y z w n'
+tiStatsChangeMaxDmp n' (TiStep x y z w n v) = TiStep x y z w n' v
+
+tiStatsOutput :: ([Int] -> [Int]) -> TiStats -> TiStats
+tiStatsOutput f (TiStep x y z w v o) = TiStep x y z w v (f o)
 
 -- | apply a function to stats in a state to make a new state
 applyToStats :: (TiStats -> TiStats) -> TiState -> TiState
@@ -89,6 +93,7 @@ data Node   = NAp Addr Addr             -- ^ function application
             | NSC Name [Name] CoreExpr  -- ^ supercombinator
             | NNum Int                  -- ^ number
             | NInd Addr                 -- ^ indirection
+            | NConstr Int Int           -- ^ data constructor
             | NPrim Name Primitive
                 -- ^ primitive, the @Name@ field is just for debugging
             | NData Int [Addr]
@@ -98,14 +103,15 @@ data Node   = NAp Addr Addr             -- ^ function application
 -- primitive instantiation
 data Primitive  = Neg | Add | Sub | Mul | Div 
                 | Lt | Eq | Gt | Leq | Neq | Geq
-                | PrimIf
-                | Constr Int Int -- ^ constructor primitive, tag and arity
+                | CaseBool | CasePair | CaseList
+                | Abort | Print
+        deriving Enum
 
 prDefs :: [(Name, Primitive)]
-prDefs = zip (arith ++ compare ++ ["if"])
-    [Neg, Add, Sub, Mul, Div, Lt, Eq, Gt, Leq, Neq, Geq, PrimIf]
+prDefs = zip (arith ++ compares ++ misc) [Neg ..]
     where arith = ["negate", "+", "-", "*", "/"]
-          compare = ["<", "==", ">", "<=", "/=", ">="]
+          compares = ["<", "==", ">", "<=", "/=", ">="]
+          misc = ["if", "casePair", "caseList", "abort", "print"]
 
 -- | @run@ the program, takes source code and gives its output. It is a 
 -- composition of parser, compiler, evaluator and showing-the-result.
@@ -122,7 +128,10 @@ compile cp = ([mainAddr], initDump, initHeap, globals, tiStatsInit)
 
 -- | extra prelude definations, including basic logic functions
 extraPreludeDefs :: CoreProgram
-extraPreludeDefs = 
+extraPreludeDefs = booleanDefs ++ pairDefs ++ listBasicDefs ++ listExtraDefs
+
+booleanDefs :: CoreProgram
+booleanDefs = 
     [   ("True", [], EConstr 1 0),
         ("False", [], EConstr 2 0),
         ("and", ["x", "y"], 
@@ -138,6 +147,72 @@ extraPreludeDefs =
             EAp (EAp (EAp (EVar "if") (EVar "x")) 
                      (EAp (EVar "not") (EVar "y"))) 
                 (EVar "y")) ]
+
+pairDefs :: CoreProgram
+pairDefs = 
+    [   ("Pair", [], EConstr 1 2),
+        ("fst", ["p"], EAp (EAp (EVar "casePair") (EVar "p")) (EVar "k1")),
+        ("snd", ["p"], EAp (EAp (EVar "casePair") (EVar "p")) (EVar "k2")) ]
+
+listBasicDefs ::CoreProgram
+listBasicDefs = 
+    [   ("Nil", [], EConstr 1 0),
+        ("Cons", [], EConstr 2 2),
+        ("length", ["as"],
+            EAp (EAp (EAp (EVar "caseList") (EVar "as")) (ENum 0)) 
+            (EVar "prLength")),
+        ("prLength", ["a","as"],
+            EAp (EAp (EVar "+") (ENum 1)) 
+                (EAp (EVar "length") (EVar "as"))),
+        ("head", ["as"],
+            EAp (EAp (EAp (EVar "caseList") (EVar "as")) (EVar "abort")) 
+            (EVar "prHead")),
+        ("tail", ["as"],
+            EAp (EAp (EAp (EVar "caseList") (EVar "as")) (EVar "abort")) 
+            (EVar "prTail")),
+        ("prHead", ["a","as"],EVar "a"),
+        ("prTail", ["a","as"],EVar "as") ]
+
+listExtraDefs :: CoreProgram
+listExtraDefs =
+    [   ("zipWith", ["f", "as", "bs"],
+            EAp (EAp (EAp (EVar "caseList") (EVar "as")) (EVar "Nil")) 
+                (EAp (EAp (EVar "prTmpZipWith") (EVar "f")) (EVar "bs"))),
+        ("prTmpZipWith", ["f", "bs", "a", "as"],
+            EAp (EAp (EAp (EVar "caseList") (EVar "bs")) (EVar "Nil")) 
+                (EAp (EAp (EAp (EVar "prZipWith") (EVar "f")) (EVar "a")) 
+                     (EVar "as"))),
+        ("prZipWith", ["f", "a", "as", "b", "bs"],
+            EAp (EAp (EVar "Cons") 
+                     (EAp (EAp (EVar "f") (EVar "a")) (EVar "b"))) 
+                (EAp (EAp (EAp (EVar "zipWith") (EVar "f")) (EVar "as")) 
+                     (EVar "bs"))),
+        ("foldr", ["f","x0","xs"],
+            EAp (EAp (EAp (EVar "caseList") (EVar "xs")) (EVar "x0")) 
+                (EAp (EAp (EVar "prFoldr") (EVar "f")) (EVar "x0"))),
+        ("prFoldr", ["f","a0","a","as"],
+            EAp (EAp (EVar "f") (EVar "a")) 
+                (EAp (EAp (EAp (EVar "foldr") (EVar "f")) (EVar "a0")) 
+                     (EVar "as"))),
+        ("foldl", ["f","x0","xs"],
+            EAp (EAp (EAp (EVar "caseList") (EVar "xs")) (EVar "x0")) 
+            (EAp (EAp (EVar "prFoldl") (EVar "f")) (EVar "x0"))),
+        ("prFoldl", ["f","a0","a","as"],
+            EAp (EAp (EAp (EVar "foldl") (EVar "f")) 
+                     (EAp (EAp (EVar "f") (EVar "a0")) (EVar "a"))) 
+                (EVar "as")),
+        ("take", ["n", "as"],
+            EAp (EAp (EAp (EVar "caseList") (EVar "as")) (EVar "Nil")) 
+                (EAp (EVar "prTake") (EVar "n"))),
+        ("prTake", ["n", "a", "as"],
+            EAp (EAp (EAp (EVar "if") 
+                          (EAp (EAp (EVar ">") (EVar "n")) (ENum 0)))
+                     (EAp (EAp (EVar "Cons") (EVar "a")) 
+                          (EAp (EAp (EVar "take") 
+                                    (EAp (EAp (EVar "-") (EVar "n")) 
+                                         (ENum 1))) 
+                               (EVar "as")))) 
+                (EVar "Nil"))]
 
 -- | use supercombinators to build initial heap, and assign their name to 
 -- addresses in the heap in globals
@@ -195,6 +270,7 @@ advanceState state@(addr:stack, dump, heap, globals, stat) =
         NNum _ -> numStep state
         NData _ _ -> dataStep state
         NInd aInd -> (aInd:stack, dump, heap, globals, stat)
+        NConstr tag arity -> buildConstr tag arity state
         NPrim name primitive -> applyToStats tiStatsIncPR $
             prStep name primitive state
 
@@ -243,7 +319,7 @@ instantiate expr heap varList = case expr of
     EAp f x -> hAlloc heap2 $ NAp addr1 addr2
         where (heap1, addr1) = instantiate f heap varList
               (heap2, addr2) = instantiate x heap1 varList
-    EConstr tag arity -> hAlloc heap $ NPrim "Pack" (Constr tag arity)
+    EConstr tag arity -> hAlloc heap $ NConstr tag arity
     ELet flag defs body -> instantiateLet flag defs body heap varList
     ELam vars body -> error "Can't instantiate lambda expression yet."
 
@@ -256,7 +332,7 @@ instantiateAndUpdate expr addr heap varList = case expr of
     EAp f x -> hUpdate heap2 addr $ NAp addr1 addr2
         where (heap1, addr1) = instantiate f heap varList
               (heap2, addr2) = instantiate x heap1 varList
-    EConstr tag arity -> hUpdate heap addr $ NPrim "Pack" (Constr tag arity)
+    EConstr tag arity -> hUpdate heap addr $ NConstr tag arity
     ELet flag defs body -> 
         instantiateAndUpdateLet flag defs body addr heap varList
     ELam vars body -> error "Can't instantiate lambda expression yet."
@@ -290,17 +366,13 @@ instantiateDefs isRec defs heap varList = (newHeap, env)
 
 -- | check the dump to determine throwing error or recovering stack
 numStep :: TiState -> TiState
-numStep ([addr], dump, heap, globals, stats) = 
-    case dump of
-      [unaryOp,ap]:dump -> ([unaryOp, ap], dump, newHeap, globals, stats)
-        where newHeap = hUpdate heap ap (NAp unaryOp addr)
-      [binOp,ap1,ap2]:dump -> ([binOp,ap1,ap2], dump, newHeap, globals, stats)
-        where newHeap = hUpdate heap ap1 (NAp binOp addr)
+numStep ([addr], stack:dump, heap, globals, stats) = 
+    ([last stack], dump, heap, globals, stats)
 numStep _ = error "Number can not apply to anything."
 
 dataStep :: TiState -> TiState
 dataStep ([addr], stack:dump, heap, globals, stats) = 
-    (stack, dump, heap, globals, stats)
+    ([last stack], dump, heap, globals, stats)
 dataStep _ = error "Data constructor has too many arguments."
 
 -- | a function advancing one step when the head of stack points to 
@@ -312,14 +384,17 @@ prStep name primitive = case primitive of
     Sub -> primArith2 name (-) 
     Mul -> primArith2 name (*) 
     Div -> primArith2 name div 
-    Constr tag arity -> primConstr tag arity 
-    PrimIf -> primIf 
     Lt -> primCompare name (<) 
     Eq -> primCompare name (==)
     Gt -> primCompare name (>) 
     Leq -> primCompare name (<=)
     Neq -> primCompare name (/=) 
-    Geq -> primCompare name (>=)    
+    Geq -> primCompare name (>=)
+    CaseBool -> primIf 
+    CasePair -> primPair
+    CaseList -> primList
+    Abort -> error "empty list"
+    Print -> primPrint
 
 primUnary :: Name -> (Node -> Node) -> TiState -> TiState
 primUnary name _ ([prim], _, _, _, _) = nArgErr name "few"
@@ -350,30 +425,76 @@ primArith2 :: Name -> (Int -> Int -> Int) -> TiState -> TiState
 primArith2 name func = primBinary name funcNode
     where funcNode (NNum x) (NNum y) = NNum $ func x y
 
-primConstr :: Int -> Int -> TiState -> TiState
-primConstr tag arity (stack, dump, heap, globals, stats) = 
+-- | take the operand address of the given NAp node
+takeOpr :: TiHeap -> Addr -> Addr
+takeOpr heap addr = let (NAp _ opr) = hLookup heap addr in opr
+
+buildConstr :: Int -> Int -> TiState -> TiState
+buildConstr tag arity (stack, dump, heap, globals, stats) = 
     (drop arity stack, dump, newHeap, globals, stats)
     where newHeap = hUpdate heap (stack!!arity) (NData tag pars)
           pars 
-            | length stack > arity = take arity $ map takeOpr (tail stack)
+            | length stack > arity = 
+                take arity $ map (takeOpr heap) (tail stack)
             | otherwise = nArgErr "Data Constructor" "few"
-          takeOpr addr = let (NAp _ opr) = hLookup heap addr in opr
 
 primCompare :: Name -> (Int -> Int -> Bool) -> TiState -> TiState
 primCompare name func = primBinary name funcNode
     where funcNode (NNum x) (NNum y) = NData (2 - fromEnum (func x y)) []
 
+-- | apply the if primitive to transit state
 primIf :: TiState -> TiState
-primIf (stack@[iff, ap1, ap2, ap3], dump, heap, globals, stats) = 
+primIf (stack@[_, _, _, ap3], dump, heap, globals, stats) = 
     case hLookup heap bool of
         NData tag _ -> ([ap3], dump, newHeapWith tag, globals, stats)
         _ -> ([bool], stack:dump, heap, globals, stats)
-    where pars@[bool, _, _] = map takeOpr (tail stack)
-          takeOpr addr = let (NAp _ opr) = hLookup heap addr in opr
+    where pars@[bool, _, _] = map (takeOpr heap) (tail stack)
           newHeapWith ind = hUpdate heap ap3 $ hLookup heap (pars!!ind)
 primIf (stack, _, _, _, _)
     | length stack < 4 = nArgErr "if" "few"
     | otherwise = nArgErr "if" "many"
+
+primPair :: TiState -> TiState
+primPair (stack@[_, _, apr], dump, heap, globals, stats) =
+    let [pair, f] = map (takeOpr heap) (tail stack) 
+    in case hLookup heap pair of
+        NData 1 [p1, p2] -> ([apr], dump, newHeap, globals, stats)
+            where newHeap = hUpdate tmpHeap apr $ NAp ap1 p2
+                  (tmpHeap, ap1) = hAlloc heap $ NAp f p1
+        _ -> ([pair], stack:dump, heap, globals, stats)
+primPair (stack, _, _, _, _)
+    | length stack < 3 = nArgErr "Pair" "few"
+    | otherwise = nArgErr "Pair" "many"
+
+primList :: TiState -> TiState
+primList (stack@[_, _, _, apr], dump, heap, globals, stats) =
+    let [ls, cn, cc] = map (takeOpr heap) (tail stack)
+    in case hLookup heap ls of
+        NData 1 _ -> ([apr], dump, newHeap, globals, stats)
+            where newHeap = hUpdate heap apr $ hLookup heap cn
+        NData 2 [ah, at] -> ([apr], dump, newHeap, globals, stats)
+            where newHeap = hUpdate tmpHeap apr $ NAp ap1 at
+                  (tmpHeap, ap1) = hAlloc heap $ NAp cc ah
+        _ -> ([ls], stack:dump, heap, globals, stats)    
+primList (stack, _, _, _, _)
+    | length stack < 4 = nArgErr "list function" "few"
+    | otherwise = nArgErr "list function" "many"
+
+primPrint :: TiState -> TiState
+primPrint (stack@[_, apr], dump, heap, globals, stats) = 
+    let ls = takeOpr heap apr
+    in case hLookup heap ls of
+        NData 1 _ -> ([ls], dump, heap, globals, stats)
+        NData 2 [ah, at] -> 
+            case hLookup heap ah of
+                NNum num -> (stack, dump, newHeap, globals, newStats)
+                    where newHeap = hUpdate heap ls $ hLookup heap at
+                          newStats = tiStatsOutput (num:) stats
+                _ -> ([ah], stack:dump, heap, globals, stats)
+        _ -> ([ls], stack:dump, heap, globals, stats)
+primPrint (stack, _, _, _, _)
+    | length stack < 2 = nArgErr "print" "few"
+    | otherwise = nArgErr "print" "many"
 
 ------------------------------------------------------------------------------
 
@@ -390,10 +511,11 @@ pprState (stack, _, heap, _, _) =
 pprNode :: Addr -> TiHeap -> Cseq  
 pprNode addr heap = cConcat [ cLPNum 3 addr, cStr ": ", 
     case hLookup heap addr of 
-      NAp a1 a2 -> cConcat [ cStr "NAp", cLPNum 3 a1, cLPNum 3 a2 ]
+      NAp a1 a2 -> cConcat [ cStr "NAp", cLPNum 4 a1, cLPNum 4 a2 ]
       NSC sc _ _ -> cStr "NSC " `cAppend` cStr sc
       NNum num -> cStr "NNum " `cAppend` cNum num
       NInd addr -> cStr "NInd" `cAppend` cLPNum 3 addr
+      NConstr t a -> cConcat [ cStr "NConstr", cLPNum 2 t, cLPNum 2 a]
       NPrim prim _ -> cStr "NPrim " `cAppend` cStr prim
       NData tag pars -> 
         cConcat [cStr "NData ", cNum tag, cStr " ", cStr $ show pars ] 
@@ -401,7 +523,8 @@ pprNode addr heap = cConcat [ cLPNum 3 addr, cStr ": ",
 
 pprStatsInState :: TiState -> Cseq
 pprStatsInState (_, _, heap, _, stats) = cConcat 
-    [   cStr "This program takes ", cNum $ steps stats, 
+    [   cStr "Output:", cStr . show . reverse . output $ stats, cNewline,
+        cStr "This program takes ", cNum $ steps stats, 
         cStr " steps, including", cNewline, cStr $ space 4, 
         cIndent reductions, cNewline, 
         cStr "There are ", cIndent heapOps, cNewline, 
