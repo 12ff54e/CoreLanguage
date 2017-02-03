@@ -33,6 +33,7 @@ type GmCode = [Instruction]
 --  * @PushInt num@ places an integer node in heap
 --  * @Mkap@ take top two addresses in stack and make them 
 --      a function application
+--  * @Slide n@ pulls off n addresses under the top of stack
 --  * @Update n@ updates the root node to an indirection node pointing to 
 --      the newly instanted supercombinator
 --  * @Pop n@ simply pops n items off the stack
@@ -41,6 +42,7 @@ data Instruction    = PushGlobal Name
                     | Push Int
                     | PushInt Int 
                     | Mkap
+                    | Slide Int
                     | Update Int
                     | Pop Int
                     | Unwind
@@ -108,7 +110,7 @@ run = showResult . eval . compile . parse
 
 ------------------------------------------------------------------------------
 
--- | compile the AST into an initail state
+-- | compile the abstract syntax tree into an initail state
 compile :: CoreProgram -> GmState
 compile prog = (initialCode, [], initialHeap, globals, gmStatsInit)
     where initialCode = [PushGlobal "main", Unwind]
@@ -129,19 +131,32 @@ compileExpr :: Int -> [Name] -> CoreExpr -> GmCode
 compileExpr depth args expr = case expr of
     ENum num -> [PushInt num]
     EVar x
-        | nAg > 0 -> [Push (nAg+depth)]
+        | nAg >= 0 -> [Push (nAg+depth)]
         | otherwise -> [PushGlobal x]
             where nAg = findIndex x args
     EAp f x ->  compileExpr depth args f ++ 
         compileExpr (depth+1) args x ++ [Mkap]
+    ELet isRec bindings body -> 
+        compileLet isRec bindings body depth args
+
+compileLet  :: IsRec -> [(Name, CoreExpr)] -> CoreExpr  
+            -> Int -> [Name] -> GmCode
+compileLet isRec bindings body depth args
+    | isRec == nonRecursive = concat (
+        zipWith (`compileExpr` args) [depth ..] (reverse $ rhssOf bindings))
+        ++ compileExpr (depth+ndefs) (bindersOf bindings ++ pl ++ args) body
+        ++ [Slide ndefs]
+    | isRec == recursive = undefined
+        where ndefs = length bindings
+              pl = replicate depth "_"
 
 -- | return the index of specific element first appears in a list, 
--- and return 0 if element not in the list
+-- and return -1 if element not in the list
 findIndex :: Eq a => a -> [a] -> Int
 findIndex e es = go e es
-    where go x [] = - length es
+    where go x [] = - length es - 1
           go x (y:ys)
-            | x==y = 1
+            | x==y = 0
             | otherwise = 1 + go x ys
 
 compiledPrim :: [(Name, Int, GmCode)]
@@ -184,28 +199,33 @@ advanceStep state =
         PushInt num -> 
             let (newHeap, addr) = hAlloc heap (NNum num) 
             in putHeap newHeap $ putStack (addr:stack) newState
-        Push nth -> 
-            let NAp _ addr = hLookup heap (stack!!nth)
-            in putStack (addr:stack) newState
+        Push n ->  putStack ((stack!!n):stack) newState
         Mkap -> let (newHeap, addr) = hAlloc heap (NAp a2 a1)
                     a1:a2:stack' = stack
                     newStack = addr:stack'
                 in putStack newStack $ putHeap newHeap newState
-        Update n -> putStack (tail stack) $ putHeap 
-            (hUpdate heap (stack !! (n+1)) (NInd $ head stack)) newState
+        Slide n -> let (a:as) = stack
+                   in putStack (a : drop n as) newState
+        Update n -> let (a:as) = stack in putStack as $ 
+            putHeap (hUpdate heap (stack !! (n+1)) (NInd a)) newState
         Pop n -> putStack (drop n stack) newState
         Unwind -> unwind newState
 
 unwind :: GmState -> GmState
-unwind state = case hLookup heap addr of
+unwind state = case hLookup (getHeap state) addr of
     NNum num -> state
     NAp a1 a2 -> putCode [Unwind] $ putStack (a1:stack) state
     NGlobal n code
         | length stack < n -> error "not enough arguments"
-        | otherwise -> putCode code $ putStack stack state
+        | otherwise -> putCode code $ rearrange n state
     NInd aInd -> putCode [Unwind] $ putStack (aInd:as) state
     where stack@(addr:as) = getStack state
-          heap = getHeap state
+
+rearrange :: Int -> GmState -> GmState
+rearrange n state = putStack newStack state
+    where newStack = map takeOpr (take n (tail stack)) ++ drop n stack
+          stack = getStack state
+          takeOpr addr = let NAp _ opr = hLookup (getHeap state) addr in opr
 
 ------------------------------------------------------------------------------
 
