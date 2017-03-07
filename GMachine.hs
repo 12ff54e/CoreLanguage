@@ -55,7 +55,7 @@ data Instruction    = PushGlobal Name
                     | Eval
                     | Neg | Add | Sub | Mul | Div
                     | Eq | Neq | Lt | Gt | Leq | Geq
-                    | Cond GmCode GmCode
+                    | Null
     deriving (Eq, Show)
 
 getCode :: GmState -> GmCode
@@ -132,7 +132,8 @@ run = showResult . eval . compile . parse
 
 ------------------------------------------------------------------------------
 
--- | compile the abstract syntax tree into an initail state
+-- | compile the abstract syntax tree into an initail state, mainly turn 
+-- supercombinators into instructions
 compile :: CoreProgram -> GmState
 compile prog = (initialCode, [], [], initialHeap, globals, gmStatsInit)
     where initialCode = [PushGlobal "main", Unwind]
@@ -145,7 +146,7 @@ compile prog = (initialCode, [], [], initialHeap, globals, gmStatsInit)
 
 compileSc :: CoreScDef -> (Name, Int, GmCode)
 compileSc (name, args, body) = (name, scArity, code)
-    where code = compileExpr 0 args body ++ 
+    where code = compileExprStrict 0 args body ++ 
             [Update scArity, Pop scArity, Unwind]
           scArity = length args
 
@@ -156,26 +157,57 @@ compileExpr depth args expr = case expr of
         | nAg >= 0 -> [Push (nAg+depth)]
         | otherwise -> [PushGlobal x]
             where nAg = findIndex x args
-    EAp f x ->  compileExpr depth args f ++ 
-        compileExpr (depth+1) args x ++ [Mkap]
+    EAp f x ->  compileExpr depth args x ++ 
+        compileExpr (depth+1) args f ++ [Mkap]
     ELet isRec bindings body -> 
         compileLet isRec bindings body depth args
 
+compileExprStrict :: Int -> [Name] -> CoreExpr -> GmCode
+compileExprStrict depth args expr = 
+    case expr of 
+        ENum num -> [PushInt num]
+        EAp (EAp (EVar f) a) b 
+            | ins /= Null ->  
+                compileExprStrict depth args b ++ 
+                compileExprStrict (depth+1) args a ++
+                [ins]
+            | otherwise -> compileExpr depth args expr ++ [Eval]
+            where ins = aLookup builtinBinOp f Null
+        EAp (EVar "negate") x -> compileExprStrict depth args x ++ [Neg]
+        ELet isRec bindings body -> 
+            compileLetStrict isRec bindings body depth args
+        _ -> compileExpr depth args expr ++ [Eval]
+    
 compileLet  :: IsRec -> [(Name, CoreExpr)] -> CoreExpr  
             -> Int -> [Name] -> GmCode
 compileLet isRec bindings body depth args
     | isRec == nonRecursive = concat (
         zipWith (`compileExpr` args) [depth ..] (reverse defs))
-        ++ cwd body ++ [Slide nDefs]
+        ++ compileWithDefs body ++ [Slide nDefs]
     | isRec == recursive = [Alloc nDefs] 
-        ++ (concat $ zipWith (++) (map cwd defs) 
+        ++ concat (zipWith (++) (map compileWithDefs defs) 
             (map (\n -> [Update n]) [0..(nDefs-1)]))
-        ++ cwd body ++ [Slide nDefs]
+        ++ compileWithDefs body ++ [Slide nDefs]
         where nDefs = length bindings
-              names = bindersOf bindings
               defs = rhssOf bindings
-              cwd = compileExpr 0 (names ++ pl ++ args)
-              pl = replicate depth "_"
+              compileWithDefs = compileExpr 0 
+                (bindersOf bindings ++ replicate depth "_" ++ args)
+
+compileLetStrict    :: IsRec -> [(Name, CoreExpr)] -> CoreExpr  
+                    -> Int -> [Name] -> GmCode
+compileLetStrict isRec bindings body depth args
+    | isRec == nonRecursive = concat (
+        zipWith (`compileExpr` args) [depth ..] (reverse defs))
+        ++ cwds body ++ [Slide nDefs]
+    | isRec == recursive = [Alloc nDefs] 
+        ++ concat (zipWith (++) 
+            (map (compileExpr 0 args') defs)
+            (map (\n -> [Update n]) [0..(nDefs-1)]))
+        ++ cwds body ++ [Slide nDefs]
+        where nDefs = length bindings
+              defs = rhssOf bindings
+              cwds = compileExprStrict 0 args'
+              args' = bindersOf bindings ++ replicate depth "_" ++ args
 
 -- | return the index of specific element first appears in a list, 
 -- and return -1 if element not in the list
@@ -193,6 +225,11 @@ compiledPrim = [
     ("-", 2, [Push 1, Eval, Push 1, Eval, Sub, Update 2, Pop 2, Unwind]),
     ("*", 2, [Push 1, Eval, Push 1, Eval, Mul, Update 2, Pop 2, Unwind]),
     ("/", 2, [Push 1, Eval, Push 1, Eval, Div, Update 2, Pop 2, Unwind]) ]
+
+builtinBinOp :: Assocs Name Instruction
+builtinBinOp = aFromList [   
+    ("+", Add), ("-", Sub), ("*", Mul), ("/", Div), ("<", Lt), ("==", Eq), 
+    (">", Gt), ("<=", Leq), (">=", Geq), ("/=", Neq) ]
 
 ------------------------------------------------------------------------------
 
@@ -236,7 +273,7 @@ advanceStep state =
             let (newHeap, addr) = hAlloc heap (NNum num) 
             in putHeap newHeap $ putStack (addr:stack) newState
         Push n ->  putStack ((stack!!n):stack) newState
-        Mkap -> let (newHeap, addr) = hAlloc heap (NAp a2 a1)
+        Mkap -> let (newHeap, addr) = hAlloc heap (NAp a1 a2)
                     a1:a2:stack' = stack
                     newStack = addr:stack'
                 in putStack newStack $ putHeap newHeap newState
