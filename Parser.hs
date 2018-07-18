@@ -8,14 +8,25 @@
 --
 -----------------------------------------------------------------------------
 
-module CoreLanguage.Parser (
+module Parser (
     -- * parser
     parse
-    -- * debugging
-    , clex, syntax 
+
+    -- * auxiliaries
+
+    -- ** data types
+    , Token, Parser
+
+    -- ** lexical 
+    , clex
+
+    -- ** syntactic
+    , pExpr, pScDef
+    , syntax
+
     )where
 
-import CoreLanguage.Base
+import Base
 
 -- | A parser is composition of clexical analyser
 -- and syntax analyser.
@@ -106,16 +117,16 @@ pApply p f toks = [ (f x,toks') | (x,toks') <- p toks ]
 
 -- | a parser for variables
 pVar :: Parser Name 
-pVar = pSat (\(_,tok) -> (isLetter.head) tok && all (tok/=) keywords)
+pVar = pSat (\(_,tok) -> (isLetter.head) tok && notElem tok keywords)
 
 -- | a parser for number
 pNum :: Parser Int
 pNum = pSat (\(_,tok) -> isDigit $ head tok) `pApply` 
-        \num -> (read num :: Int)
+        \ num -> read num :: Int
 
 -- | combine two parser p1 and p2 to contruct a "p1 or p2" parser
 pOr :: Parser a -> Parser a -> Parser a
-pOr p1 p2 toks = (p1 toks) ++ (p2 toks)
+pOr p1 p2 toks = p1 toks ++ p2 toks
 
 -- | contruct a parser always succeed and return the default value,
 -- paired with the origin token list
@@ -199,13 +210,13 @@ pExpr_p1, pExpr_p2, pExpr_p3, pExpr_p4, pExpr_p5, pAExpr :: Parser CoreExpr
 pExpr = pLet `pOr` pCase `pOr` pLambda `pOr` pExpr_p1
 
 pLet = pThen4 mk_let (pLit "let" `pOr` pLit "letrec") pDefs (pLit "in") pExpr
-    where mk_let kw defs _ expr = ELet (kw=="letrec") defs expr 
+    where mk_let kw defs _ = ELet (kw == "letrec") defs 
 
 pCase = pThen4 mk_case (pLit "case") pExpr (pLit "of") pAlts
-    where mk_case _ expr _ alts = ECase expr alts
+    where mk_case _ expr _ = ECase expr
 
 pLambda = pThen4 mk_lambda (pLit "\\") (pOneOrMore pVar) (pLit "->") pExpr
-    where mk_lambda _ vars _ expr = ELam vars expr
+    where mk_lambda _ vars _ = ELam vars
 
 -- support parsers of components in expression
 pDefs :: Parser [(Name,CoreExpr)]

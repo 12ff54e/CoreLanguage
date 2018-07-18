@@ -9,19 +9,20 @@
 ------------------------------------------------------------------------------
 
 
-module CoreLanguage.GMachine (
+module GMachine (
 
     -- * run the program
     run
 
     ) where
 
-import CoreLanguage.Base
-import CoreLanguage.Parser
-import CoreLanguage.Utility
+import Base
+import Parser
+import Utility
 
 -- | the state used in g-machine
 type GmState = (GmCode, GmStack, GmDump, GmHeap, GmGlobals, GmStats)
+-- TODO: Implements Print instruction & add output in state
 
 -- | GmCode is a sequence of instructions
 type GmCode = [Instruction]
@@ -42,7 +43,12 @@ type GmCode = [Instruction]
 --  * @Eval@ will evaluate the head of stack to WHNF
 --  * Arithmetic operations
 --  * Comparison operations
---  * @Cond code1 code2@ acts like if expression
+--  * @Pack tag arity@ takes @arity@ of the stack to construct
+--      a constructor node
+--  * @Split n@ decompose a construtor(located on the top of stack) into
+--      its parameters
+--  * @CaseJump caselist@ pick the code pieces in @caselist@ according to
+--      the constructor on top of stack
 data Instruction    = PushGlobal Name
                     | Push Int
                     | PushInt Int 
@@ -53,24 +59,28 @@ data Instruction    = PushGlobal Name
                     | Unwind
                     | Alloc Int
                     | Eval
+                    | Pack Int Int
+                    | Split Int
+                    | CaseJump [(Int, GmCode)]
                     | Neg | Add | Sub | Mul | Div
                     | Eq | Neq | Lt | Gt | Leq | Geq
                     | Null
+                    | MakeGlobal Int GmCode
     deriving (Eq, Show)
 
 getCode :: GmState -> GmCode
 getCode (c,_,_,_,_,_) = c
 
 putCode :: GmCode -> GmState -> GmState
-putCode c' (c, sk, d, h, g, ss) = (c', sk, d, h, g, ss)
+putCode c' (_, sk, d, h, g, ss) = (c', sk, d, h, g, ss)
 
 type GmStack = [Addr]
 
 getStack :: GmState -> GmStack
 getStack (_,s,_,_,_,_) = s
 
-putStack :: GmStack -> GmState ->GmState
-putStack sk' (c, sk, d, h, g, ss) = (c, sk', d, h, g, ss)
+putStack :: GmStack -> GmState -> GmState
+putStack sk' (c, _, d, h, g, ss) = (c, sk', d, h, g, ss)
 
 type GmDump = [(GmCode, GmStack)]
 
@@ -78,7 +88,7 @@ getDump :: GmState -> GmDump
 getDump (_,_,d,_,_,_) = d
 
 putDump :: GmDump -> GmState -> GmState
-putDump d' (c, sk, d, h, g, ss) = (c, sk, d', h, g, ss)
+putDump d' (c, sk, _, h, g, ss) = (c, sk, d', h, g, ss)
 
 type GmHeap = Heap Node
 
@@ -86,7 +96,7 @@ getHeap :: GmState -> GmHeap
 getHeap (_,_,_,h,_,_) = h
 
 putHeap :: GmHeap -> GmState -> GmState
-putHeap h' (c, sk, d, h, g, ss) = (c, sk, d, h', g, ss)
+putHeap h' (c, sk, d, _, g, ss) = (c, sk, d, h', g, ss)
 
 -- | the supercombinator node now stores numbers of arguments taken and
 -- instructions, differs from that in tempelate instantiation machine
@@ -94,11 +104,15 @@ data Node   = NAp Addr Addr
             | NNum Int
             | NGlobal Int GmCode
             | NInd Int
+            | NConstr Int [Addr]
 
 type GmGlobals = Assocs Name Addr
 
 getGlobals :: GmState -> GmGlobals
 getGlobals (_,_,_,_,g,_) = g
+
+putGlobals :: GmGlobals -> GmState -> GmState
+putGlobals g' (c, sk, d, h, _, ss) = (c, sk, d, h, g', ss)
 
 data GmStats = GmStep   { step :: Int
                          ,maxStk :: Int
@@ -112,16 +126,16 @@ gmStatsIncStep :: GmStats -> GmStats
 gmStatsIncStep (GmStep n x y) = GmStep (n+1) x y
 
 gmStatsChangeMaxStk :: Int -> GmStats -> GmStats
-gmStatsChangeMaxStk n' (GmStep x n y) = GmStep x n' y
+gmStatsChangeMaxStk n' (GmStep x _ y) = GmStep x n' y
 
 gmStatsChangeMaxDmp :: Int -> GmStats -> GmStats
-gmStatsChangeMaxDmp n' (GmStep x y n) = GmStep x y n'
+gmStatsChangeMaxDmp n' (GmStep x y _) = GmStep x y n'
 
 getStats :: GmState -> GmStats
 getStats (_,_,_,_,_,ss) = ss
 
 putStats :: GmStats -> GmState -> GmState
-putStats ss' (c, sk, d, h, g, ss) = (c, sk, d, h, g, ss')
+putStats ss' (c, sk, d, h, g, _) = (c, sk, d, h, g, ss')
 
 ------------------------------------------------------------------------------
 ------------------------------------------------------------------------------
@@ -161,30 +175,76 @@ compileExpr depth args expr = case expr of
         compileExpr (depth+1) args f ++ [Mkap]
     ELet isRec bindings body -> 
         compileLet isRec bindings body depth args
+    EConstr tag arity -> 
+        [PushGlobal ("Pack{"++show tag++","++show arity++"}")]
+    ECase _ _ -> error "can't compile case expression in lazy scheme yet" -- FIXME: remove this error
+--    ECase body alters -> take nargs [Push n | n <- [depth ..]] ++
+--        [MakeGlobal nargs (compileExprStrict 0 args expr)] ++
+--        replicate nargs Mkap
+--            where nargs = length args
+    ELam _ _ -> error "can't compile lambda expression yet"
 
 compileExprStrict :: Int -> [Name] -> CoreExpr -> GmCode
-compileExprStrict depth args expr = 
+compileExprStrict depth args expr =
     case expr of 
         ENum num -> [PushInt num]
-        EAp (EAp (EVar f) a) b 
-            | ins /= Null ->  
-                compileExprStrict depth args b ++ 
-                compileExprStrict (depth+1) args a ++
-                [ins]
-            | otherwise -> compileExpr depth args expr ++ [Eval]
-            where ins = aLookup builtinBinOp f Null
-        EAp (EVar "negate") x -> compileExprStrict depth args x ++ [Neg]
         ELet isRec bindings body -> 
             compileLetStrict isRec bindings body depth args
-        _ -> compileExpr depth args expr ++ [Eval]
-    
+        EConstr tag arity -> [Pack tag arity]
+        ECase body alters -> compileExprStrict depth args body ++ 
+            [CaseJump (map (compileAlter depth args) alters)]
+--        EAp func x -> case func of
+--            EVar "negate" -> compileExprStrict depth args x ++ [Neg]
+--            EAp (EVar op) y
+--                | ins /= Null ->  
+--                    compileExprStrict depth args y ++ 
+--                    compileExprStrict (depth+1) args x ++
+--                    [ins]
+--                | otherwise -> defaultCase
+--                where ins = aLookup builtinBinOp op Null
+--            _ 
+--                | apHead func == EConstr tag arity -> undefined                                 
+--                | otherwise -> defaultCase
+        EAp _ _ -> case last plainExpr of
+            EVar "negate"
+                | exprLength /= 2 -> 
+                    error "negate applied to too many arguements"
+                | otherwise -> 
+                    compileExprStrict depth args (head plainExpr) ++ [Neg]
+            EVar op
+                | ins /= Null -> case () of
+                    _   | exprLength < 3 -> 
+                            error (op++" applied to too few arguements")
+                        | exprLength > 3 ->
+                            error (op++" applied to too many arguements")
+                        | otherwise -> let y:x:_ = plainExpr in
+                                        compileExprStrict depth args y ++ 
+                                        compileExprStrict (depth+1) args x ++
+                                        [ins]
+                | otherwise -> defaultCase
+                where ins = aLookup builtinBinOp op Null
+            EConstr tag arity 
+                | exprLength /= arity+1 -> 
+                    error "arguement number mismatch"
+                | otherwise -> concat 
+                    (zipWith (`compileExpr` args) [depth ..] (init plainExpr))
+                    ++ [Pack tag arity]
+            _ -> defaultCase
+            where plainExpr = flatten expr
+                  exprLength = length plainExpr
+        _ -> defaultCase
+        where defaultCase = compileExpr depth args expr ++ [Eval]
+              flatten apChain = case apChain of
+                                EAp f x -> x : flatten f
+                                _ -> [apChain]
+
 compileLet  :: IsRec -> [(Name, CoreExpr)] -> CoreExpr  
             -> Int -> [Name] -> GmCode
 compileLet isRec bindings body depth args
     | isRec == nonRecursive = concat (
         zipWith (`compileExpr` args) [depth ..] (reverse defs))
         ++ compileWithDefs body ++ [Slide nDefs]
-    | isRec == recursive = [Alloc nDefs] 
+    | otherwise = [Alloc nDefs] 
         ++ concat (zipWith (++) (map compileWithDefs defs) 
             (map (\n -> [Update n]) [0..(nDefs-1)]))
         ++ compileWithDefs body ++ [Slide nDefs]
@@ -199,7 +259,7 @@ compileLetStrict isRec bindings body depth args
     | isRec == nonRecursive = concat (
         zipWith (`compileExpr` args) [depth ..] (reverse defs))
         ++ cwds body ++ [Slide nDefs]
-    | isRec == recursive = [Alloc nDefs] 
+    | otherwise = [Alloc nDefs] 
         ++ concat (zipWith (++) 
             (map (compileExpr 0 args') defs)
             (map (\n -> [Update n]) [0..(nDefs-1)]))
@@ -209,22 +269,31 @@ compileLetStrict isRec bindings body depth args
               cwds = compileExprStrict 0 args'
               args' = bindersOf bindings ++ replicate depth "_" ++ args
 
+compileAlter :: Int -> [Name] -> CoreAlter -> (Int, GmCode)
+compileAlter depth args (tag, constrArgs, body) = (tag, code)
+    where code = [Split arity] ++ compileExprStrict 0 args' body ++ 
+                    if' (arity==0) [] [Slide arity]
+          args' = constrArgs ++ replicate depth "_" ++ args
+          arity = length constrArgs
+
 -- | return the index of specific element first appears in a list, 
 -- and return -1 if element not in the list
 findIndex :: Eq a => a -> [a] -> Int
 findIndex e es = go e es
-    where go x [] = - length es - 1
+    where go _ [] = - length es - 1
           go x (y:ys)
             | x==y = 0
             | otherwise = 1 + go x ys
 
 compiledPrim :: [(Name, Int, GmCode)]
-compiledPrim = [
-    ("negate", 1, [Push 0, Eval, Neg, Update 1, Pop 1, Unwind]),
-    ("+", 2, [Push 1, Eval, Push 1, Eval, Add, Update 2, Pop 2, Unwind]),
-    ("-", 2, [Push 1, Eval, Push 1, Eval, Sub, Update 2, Pop 2, Unwind]),
-    ("*", 2, [Push 1, Eval, Push 1, Eval, Mul, Update 2, Pop 2, Unwind]),
-    ("/", 2, [Push 1, Eval, Push 1, Eval, Div, Update 2, Pop 2, Unwind]) ]
+compiledPrim = 
+    ("negate", 1, [Push 0, Eval, Neg, Update 1, Pop 1, Unwind]) : 
+--    ("+", 2, [Push 1, Eval, Push 1, Eval, Add, Update 2, Pop 2, Unwind]),
+--    ("-", 2, [Push 1, Eval, Push 1, Eval, Sub, Update 2, Pop 2, Unwind]),
+--    ("*", 2, [Push 1, Eval, Push 1, Eval, Mul, Update 2, Pop 2, Unwind]),
+--    ("/", 2, [Push 1, Eval, Push 1, Eval, Div, Update 2, Pop 2, Unwind]) ]
+    [(name, 2, [Push 1, Eval, Push 1, Eval]++op:[Update 2, Pop 2, Unwind]) 
+        | (name, op) <- aToList builtinBinOp]
 
 builtinBinOp :: Assocs Name Instruction
 builtinBinOp = aFromList [   
@@ -244,7 +313,7 @@ eval state = state : followingStates
 gmFinal :: GmState -> Bool
 gmFinal state = case getCode state of
                   [] -> True
-                  codes -> False
+                  _ -> False
 
 -- | log the performance statistics
 doAdmin :: GmState -> GmState
@@ -260,15 +329,12 @@ doAdmin state = putStats (gmStatsIncStep.f.g $ stats) state
 advanceStep :: GmState -> GmState
 advanceStep state = 
     let (ins:code) = getCode state
-        stack = getStack state
+        stack@(a:as) = getStack state
         dump = getDump state
         heap = getHeap state
-        globals = getGlobals state
         newState = putCode code state
     in case ins of
-        PushGlobal name -> 
-            let err = error $ "can't find defination of "++name 
-            in putStack (aLookup globals name err : stack) newState
+        PushGlobal name -> pushGlobal name newState
         PushInt num -> 
             let (newHeap, addr) = hAlloc heap (NNum num) 
             in putHeap newHeap $ putStack (addr:stack) newState
@@ -277,30 +343,66 @@ advanceStep state =
                     a1:a2:stack' = stack
                     newStack = addr:stack'
                 in putStack newStack $ putHeap newHeap newState
-        Slide n -> let (a:as) = stack
-                   in putStack (a : drop n as) newState
-        Update n -> let (a:as) = stack in putStack as $ 
+        Slide n -> putStack (a : drop n as) newState
+        Update n -> putStack as $ 
             putHeap (hUpdate heap (stack !! (n+1)) (NInd a)) newState
         Pop n -> putStack (drop n stack) newState
         Unwind -> unwind newState
-        Alloc n -> let (newHeap, as) = mapAccuml hAlloc heap $
-                            replicate n (NInd hNull)
-                   in putStack (as++stack) $ putHeap newHeap newState
-        Eval -> let (a:as) = stack in putCode [Unwind] . 
-                    putDump ((code,as):dump) . putStack [a] $ state
+        Alloc n -> let (newHeap, aNulls) = mapAccuml hAlloc heap $
+                                        replicate n (NInd hNull)
+                   in putStack (aNulls++stack) $ putHeap newHeap newState
+        Eval -> putCode [Unwind] . putDump ((code,as):dump) . 
+                    putStack [a] $ state
+        Pack tag arity -> let (newHeap, addr) = 
+                                hAlloc heap (NConstr tag (take arity stack))
+                          in putHeap newHeap $ putStack (addr:stack) newState
+        Split arity
+            | length args == arity -> putStack (args++as) newState
+            | otherwise -> 
+                error "pattern match failed: arguement numbers mismatch"
+            where NConstr _ args = hLookup heap (head stack)
+        CaseJump alters -> caseJump alters newState
         prims -> primStep prims newState
+
+pushGlobal :: Name -> GmState -> GmState
+pushGlobal name state
+    | take 4 name == "Pack" = case () of
+        _   | addr == hNull -> putGlobals newGlobals . 
+                putHeap newHeap . putStack (newAddr:stack) $ state
+            | otherwise -> putStack (addr:stack) state
+    | otherwise =   let err = error $ "can't find defination of "++name 
+                    in putStack (aLookup globals name err : stack) state
+        where globals = getGlobals state
+              stack = getStack state  
+              addr = aLookup globals name hNull
+              newGlobals = aInsert (name, newAddr) globals
+              (newHeap, newAddr) = 
+                hAlloc (getHeap state) (NGlobal arity code)
+              (EConstr tag arity, _) = head . pExpr . clex (0,0) $ name
+              code = [Pack tag arity, Slide arity, Unwind]
+
+caseJump :: [(Int, GmCode)] -> GmState -> GmState
+caseJump alters state = putCode (alter ++ getCode state) state
+    where alter = go alters tag
+          NConstr tag _ = hLookup (getHeap state) . head . getStack $ state
+          go ((t,c):as) x
+            | t==x = c
+            | otherwise = go as x
+          go [] _ = error "case has no alternatives" 
 
 unwind :: GmState -> GmState
 unwind state = case hLookup (getHeap state) addr of
-    NNum num -> case getDump state of
-        (c,s):ds -> putDump ds . putCode c . putStack (addr:s) $ state
-        _ -> state
-    NAp a1 a2 -> putCode [Unwind] $ putStack (a1:stack) state
+    NNum _ -> checkDump
+    NAp a1 _ -> putCode [Unwind] $ putStack (a1:stack) state
     NGlobal n code
         | length stack < n -> error "not enough arguments"
         | otherwise -> putCode code $ rearrange n state
     NInd aInd -> putCode [Unwind] $ putStack (aInd:as) state
+    NConstr _ _ -> checkDump
     where stack@(addr:as) = getStack state
+          checkDump = case getDump state of
+            (c,s):ds -> putDump ds . putCode c . putStack (addr:s) $ state
+            _ -> state
 
 rearrange :: Int -> GmState -> GmState
 rearrange n state = putStack newStack state
@@ -318,6 +420,11 @@ unboxInteger :: Addr -> GmState -> Int
 unboxInteger addr state = ub $ hLookup (getHeap state) addr
     where ub (NNum num) = num
           ub _ = error "Unboxing a non-interger"
+
+boxBool :: Bool -> GmState -> GmState
+boxBool b state = putStack (addr: getStack state) $ putHeap newHeap state
+    where (newHeap, addr) = hAlloc (getHeap state) (NConstr b' [])
+          b' | b = 1 | otherwise = 2
 
 primUnary   :: (b -> GmState -> GmState) 
             -> (Addr -> GmState -> a) 
@@ -337,6 +444,9 @@ primArith1 = primUnary boxInteger unboxInteger
 primArith2 :: (Int -> Int -> Int) -> GmState -> GmState
 primArith2 = primBinary boxInteger unboxInteger
 
+primCompare :: (Int -> Int -> Bool) -> GmState -> GmState
+primCompare = primBinary boxBool unboxInteger
+
 primStep :: Instruction -> GmState -> GmState
 primStep prim = case prim of
     Neg -> primArith1 negate
@@ -344,11 +454,19 @@ primStep prim = case prim of
     Sub -> primArith2 (-)
     Mul -> primArith2 (*)
     Div -> primArith2 div
+    Lt -> primCompare (<)
+    Gt -> primCompare (>)
+    Eq -> primCompare (==)
+    Neq -> primCompare (/=)
+    Leq -> primCompare (<=)
+    Geq -> primCompare (>=)
+    _ -> error "Just in case"
 
 ------------------------------------------------------------------------------
 
 -- | formatting the output
 showResult :: [GmState] -> String
+showResult [] = error "Just in case"
 showResult states@(s:_) = cToStr $ cConcat [
     cStr "Supercombinator Definations", cNewline,
     cIntercalate cNewline $ map (pprSc heap) (aToList globals),
@@ -366,13 +484,13 @@ pprSc heap (name, addr) = cConcat [
     where NGlobal _ code = hLookup heap addr
 
 pprCode :: GmCode -> Cseq
-pprCode = cIntercalate cNewline . map pprInstruction
+pprCode = cIntercalate (cStr " ,") . map pprInstruction
 
 pprInstruction :: Instruction -> Cseq
 pprInstruction = cStr . show
 
 pprState :: GmState -> Cseq
-pprState (code, stack, dump, heap, globals, _) = cConcat [   
+pprState (code, stack, _, heap, globals, _) = cConcat [   
     cStr "Instructions:", cNewline, 
     cStr "  ", cIndent $ pprCode code, cNewline,
     cStr "Stack:", cNewline, 
@@ -386,13 +504,15 @@ pprNode addr heap globals = cConcat [ cLPNum 3 addr, cStr " -> ",
         NGlobal _ _ -> let name:_ = [ n | (n,a) <- aToList globals, a==addr]
                        in cStr ("Supercombinator "++name)
         NNum num -> cStr "Num " `cAppend` cNum num
-        NInd addr -> cStr "Indirection to " `cAppend` cNum addr
+        NInd aInd -> cStr "Indirection to " `cAppend` cNum aInd
+        NConstr tag args -> cIntercalate (cStr " ") 
+            [cStr "Constr", cNum tag, cStr (show args)]
     ]
 
-pprStatistics :: GmState -> Cseq
-pprStatistics state = cConcat [   
+pprStatistics :: GmState -> Cseq 
+pprStatistics state = cStr "  " `cAppend` cIndent (cConcat [   
     cStr "Steps taken is ", cNum $ step stats, cNewline,
     cStr "Max Stack Depth is ", cNum $ maxStk stats, cNewline,
-    cStr "Max Dump Depth is ", cNum $ maxDmp stats]
+    cStr "Max Dump Depth is ", cNum $ maxDmp stats ])
     where stats = getStats state
 

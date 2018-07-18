@@ -14,7 +14,7 @@
 --
 -----------------------------------------------------------------------------
 
-module CoreLanguage.Utility (
+module Utility (
     
     -- * A.1 Heap
     
@@ -45,7 +45,7 @@ module CoreLanguage.Utility (
     , aDomain, aRange, aLookup
     
     -- * A.5 Other useful function definitions
-    , mapAccuml, sort, space
+    , mapAccuml, sort, space, if'
 
     )where
 
@@ -168,6 +168,7 @@ aToList = toList
 data BST k a    = Tip
                 | BinNode Int k a (BST k a) (BST k a)
     deriving Show
+-- TODO: update BST to balanced BST
 
 emptyBST :: BST k a 
 emptyBST = Tip
@@ -189,7 +190,7 @@ insertBST key obj tree@(BinNode size k o lc rc)
                 | t==a = True
                 | t<a = False
                 | otherwise = t `elemInfAsc` as
-              powerOf2 = iterate (flip shiftL 1) 1
+              powerOf2 = iterate (`shiftL` 1) 1
               size' = size+1
 
 -- update an element in BST, and for the same reason in @insertBST@,
@@ -230,7 +231,7 @@ mapAccuml f acc (b:bs) = (acc'', c:cs)
 -- | sort a list with ascending order
 sort :: Ord a => [a] -> [a]
 sort [] = []
-sort (a:[]) = [a]
+sort [a] = [a]
 sort as = merge (sort xs) (sort ys)
     where (xs,ys) = splitAt (length as `div`2) as
           merge ms [] = ms
@@ -242,3 +243,8 @@ sort as = merge (sort xs) (sort ys)
 -- | generate a string of @n@ spaces
 space :: Int -> String
 space n = replicate n ' '
+
+-- | handmade if function, @if' crit t f = if crit then t else f@
+if' :: Bool -> a -> a -> a
+if' True a _ = a
+if' False _ a = a

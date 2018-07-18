@@ -10,7 +10,7 @@
 --
 -----------------------------------------------------------------------------
 
-module CoreLanguage.Base (
+module Base (
 
     -- * Data types
     Expr(..), Alter(..), ScDef(..), Program(..), Cseq(..)
@@ -43,7 +43,7 @@ module CoreLanguage.Base (
     
     )where
 
-import CoreLanguage.Utility
+import Utility
 
 -- | Expressions are the basic unit of the /Core Language/
 -- and thus a new data type is defined. Expression can be variable,
