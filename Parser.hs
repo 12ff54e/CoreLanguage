@@ -117,7 +117,10 @@ pApply p f toks = [ (f x,toks') | (x,toks') <- p toks ]
 
 -- | a parser for variables
 pVar :: Parser Name 
-pVar = pSat (\(_,tok) -> (isLetter.head) tok && notElem tok keywords)
+pVar = pSat (\(_,tok) -> 
+    (isLetter.head) tok 
+    && notElem tok keywords 
+    || tok `elem` concat operators )
 
 -- | a parser for number
 pNum :: Parser Int
