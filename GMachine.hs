@@ -9,20 +9,29 @@
 ------------------------------------------------------------------------------
 
 
-module GMachine (
+module GMachine --(
 
     -- * run the program
-    run
+--    run
 
-    ) where
+--    )
+     where
 
 import Base
 import Parser
 import Utility
 
 -- | the state used in g-machine
-type GmState = (GmCode, GmStack, GmDump, GmHeap, GmGlobals, GmStats)
--- TODO: Implements Print instruction & add output in state
+type GmState = (GmOutput, GmCode, GmStack, GmDump, GmHeap, GmGlobals, GmStats)
+
+-- | GmOutput is just a string
+type GmOutput = String
+
+getOutput :: GmState -> GmOutput
+getOutput (o,_,_,_,_,_,_) = o
+
+putOutput :: GmOutput -> GmState -> GmState
+putOutput o (_, c, sk, d, h, g, ss) = (o, c, sk, d, h, g, ss)
 
 -- | GmCode is a sequence of instructions
 type GmCode = [Instruction]
@@ -49,6 +58,7 @@ type GmCode = [Instruction]
 --      its parameters
 --  * @CaseJump caselist@ pick the code pieces in @caselist@ according to
 --      the constructor on top of stack
+--  * @Print@ generates output of program and put it in @GmOutput@
 data Instruction    = PushGlobal Name
                     | Push Int
                     | PushInt Int 
@@ -62,6 +72,7 @@ data Instruction    = PushGlobal Name
                     | Pack Int Int
                     | Split Int
                     | CaseJump [(Int, GmCode)]
+                    | Print
                     | Neg | Add | Sub | Mul | Div
                     | Eq | Neq | Lt | Gt | Leq | Geq
                     | Null
@@ -69,34 +80,34 @@ data Instruction    = PushGlobal Name
     deriving (Eq, Show)
 
 getCode :: GmState -> GmCode
-getCode (c,_,_,_,_,_) = c
+getCode (_,c,_,_,_,_,_) = c
 
 putCode :: GmCode -> GmState -> GmState
-putCode c' (_, sk, d, h, g, ss) = (c', sk, d, h, g, ss)
+putCode c' (o, _, sk, d, h, g, ss) = (o, c', sk, d, h, g, ss)
 
 type GmStack = [Addr]
 
 getStack :: GmState -> GmStack
-getStack (_,s,_,_,_,_) = s
+getStack (_,_,s,_,_,_,_) = s
 
 putStack :: GmStack -> GmState -> GmState
-putStack sk' (c, _, d, h, g, ss) = (c, sk', d, h, g, ss)
+putStack sk' (o, c, _, d, h, g, ss) = (o, c, sk', d, h, g, ss)
 
 type GmDump = [(GmCode, GmStack)]
 
 getDump :: GmState -> GmDump
-getDump (_,_,d,_,_,_) = d
+getDump (_,_,_,d,_,_,_) = d
 
 putDump :: GmDump -> GmState -> GmState
-putDump d' (c, sk, _, h, g, ss) = (c, sk, d', h, g, ss)
+putDump d' (o, c, sk, _, h, g, ss) = (o, c, sk, d', h, g, ss)
 
 type GmHeap = Heap Node
 
 getHeap :: GmState -> GmHeap
-getHeap (_,_,_,h,_,_) = h
+getHeap (_,_,_,_,h,_,_) = h
 
 putHeap :: GmHeap -> GmState -> GmState
-putHeap h' (c, sk, d, _, g, ss) = (c, sk, d, h', g, ss)
+putHeap h' (o, c, sk, d, _, g, ss) = (o, c, sk, d, h', g, ss)
 
 -- | the supercombinator node now stores numbers of arguments taken and
 -- instructions, differs from that in tempelate instantiation machine
@@ -109,10 +120,10 @@ data Node   = NAp Addr Addr
 type GmGlobals = Assocs Name Addr
 
 getGlobals :: GmState -> GmGlobals
-getGlobals (_,_,_,_,g,_) = g
+getGlobals (_,_,_,_,_,g,_) = g
 
 putGlobals :: GmGlobals -> GmState -> GmState
-putGlobals g' (c, sk, d, h, _, ss) = (c, sk, d, h, g', ss)
+putGlobals g' (o,c, sk, d, h, _, ss) = (o,c, sk, d, h, g', ss)
 
 data GmStats = GmStep   { step :: Int
                          ,maxStk :: Int
@@ -132,10 +143,10 @@ gmStatsChangeMaxDmp :: Int -> GmStats -> GmStats
 gmStatsChangeMaxDmp n' (GmStep x y _) = GmStep x y n'
 
 getStats :: GmState -> GmStats
-getStats (_,_,_,_,_,ss) = ss
+getStats (_,_,_,_,_,_,ss) = ss
 
 putStats :: GmStats -> GmState -> GmState
-putStats ss' (c, sk, d, h, g, _) = (c, sk, d, h, g, ss')
+putStats ss' (o, c, sk, d, h, g, _) = (o, c, sk, d, h, g, ss')
 
 ------------------------------------------------------------------------------
 ------------------------------------------------------------------------------
@@ -149,7 +160,7 @@ run = showResult . eval . compile . parse
 -- | compile the abstract syntax tree into an initail state, mainly turn 
 -- supercombinators into instructions
 compile :: CoreProgram -> GmState
-compile prog = (initialCode, [], [], initialHeap, globals, gmStatsInit)
+compile prog = ("" ,initialCode, [], [], initialHeap, globals, gmStatsInit)
     where initialCode = [PushGlobal "main", Unwind]
           globals = aFromList tmpGlobals
           (initialHeap, tmpGlobals) = mapAccuml allocateSc hInitial compiled
@@ -223,7 +234,7 @@ compileExprStrict depth args expr =
                                         [ins]
                 | otherwise -> defaultCase
                 where ins = aLookup builtinBinOp op Null
-            EConstr tag arity 
+            EConstr tag arity
                 | exprLength /= arity+1 -> 
                     error "arguement number mismatch"
                 | otherwise -> concat 
@@ -292,7 +303,7 @@ compiledPrim =
 --    ("-", 2, [Push 1, Eval, Push 1, Eval, Sub, Update 2, Pop 2, Unwind]),
 --    ("*", 2, [Push 1, Eval, Push 1, Eval, Mul, Update 2, Pop 2, Unwind]),
 --    ("/", 2, [Push 1, Eval, Push 1, Eval, Div, Update 2, Pop 2, Unwind]) ]
-    [(name, 2, [Push 1, Eval, Push 1, Eval]++op:[Update 2, Pop 2, Unwind]) 
+    [(name, 2, [Push 1, Eval, Push 1, Eval, op, Update 2, Pop 2, Unwind]) 
         | (name, op) <- aToList builtinBinOp]
 
 builtinBinOp :: Assocs Name Instruction
@@ -353,15 +364,17 @@ advanceStep state =
                    in putStack (aNulls++stack) $ putHeap newHeap newState
         Eval -> putCode [Unwind] . putDump ((code,as):dump) . 
                     putStack [a] $ state
-        Pack tag arity -> let (newHeap, addr) = 
-                                hAlloc heap (NConstr tag (take arity stack))
-                          in putHeap newHeap $ putStack (addr:stack) newState
+        Pack tag arity -> 
+            let (args, stack') = splitAt arity stack
+                (newHeap, addr) = hAlloc heap (NConstr tag args)
+            in putHeap newHeap $ putStack (addr:stack') newState
         Split arity
             | length args == arity -> putStack (args++as) newState
             | otherwise -> 
                 error "pattern match failed: arguement numbers mismatch"
-            where NConstr _ args = hLookup heap (head stack)
+            where NConstr _ args = hLookup heap a
         CaseJump alters -> caseJump alters newState
+        Print -> putStack as $ printAddr a newState
         prims -> primStep prims newState
 
 pushGlobal :: Name -> GmState -> GmState
@@ -379,7 +392,7 @@ pushGlobal name state
               (newHeap, newAddr) = 
                 hAlloc (getHeap state) (NGlobal arity code)
               (EConstr tag arity, _) = head . pExpr . clex (0,0) $ name
-              code = [Pack tag arity, Slide arity, Unwind]
+              code = [Pack tag arity, Update 0, Unwind]
 
 caseJump :: [(Int, GmCode)] -> GmState -> GmState
 caseJump alters state = putCode (alter ++ getCode state) state
@@ -388,7 +401,13 @@ caseJump alters state = putCode (alter ++ getCode state) state
           go ((t,c):as) x
             | t==x = c
             | otherwise = go as x
-          go [] _ = error "case has no alternatives" 
+          go [] _ = error "case has no alternatives"
+
+printAddr :: Addr -> GmState -> GmState
+printAddr addr state = case hLookup (getHeap state) addr of
+    NNum num -> putOutput (getOutput state ++ show num) state
+    NConstr t as -> putCode code . putStack (as ++ getStack state) $ state
+        where   code = concat $ replicate (length as) [Eval, Print]
 
 unwind :: GmState -> GmState
 unwind state = case hLookup (getHeap state) addr of
@@ -484,18 +503,48 @@ pprSc heap (name, addr) = cConcat [
     where NGlobal _ code = hLookup heap addr
 
 pprCode :: GmCode -> Cseq
-pprCode = cIntercalate (cStr " ,") . map pprInstruction
+pprCode = cIntercalate (cStr ", ") . map pprInstruction
 
 pprInstruction :: Instruction -> Cseq
 pprInstruction = cStr . show
 
 pprState :: GmState -> Cseq
-pprState (code, stack, _, heap, globals, _) = cConcat [   
+pprState s = cConcat [
+    pprOutput s, cNewline,
     cStr "Instructions:", cNewline, 
-    cStr "  ", cIndent $ pprCode code, cNewline,
+    cStr "  ", cIndent . pprCode . getCode $ s, cNewline,
+    pprStack s, cNewline,
+    pprDump s ]
+
+pprOutput :: GmState -> Cseq
+pprOutput s = cConcat [
+    cStr "Output:", cNewline,
+    cStr "  ", cIndent . cStr . getOutput $ s ]
+
+pprStack :: GmState -> Cseq
+pprStack s = cConcat [
     cStr "Stack:", cNewline, 
     cIntercalate cNewline $ 
         pprNode <$> reverse stack <*> pure heap <*> pure globals ]
+    where   stack = getStack s
+            heap = getHeap s
+            globals = getGlobals s
+
+pprDump :: GmState -> Cseq
+pprDump s = case dump of
+    [] -> cStr "Dump is Empty."
+    _ -> cConcat [
+        cStr "Dump:", cNewline,
+        cIntercalate cNewline . map pprDumpItem . reverse $ dump ]
+    where dump = getDump s
+
+pprDumpItem :: (GmCode, GmStack) -> Cseq
+pprDumpItem (code, stack) = cConcat [
+    cStr "Code: ", pprCode shortCode, 
+    cStr " | Stack: ", cIntercalate (cStr ", ") . map cNum . reverse $ stack ]
+    where shortCode
+                | length code > 3 = take 3 code
+                | otherwise = code
 
 pprNode :: Addr -> GmHeap -> GmGlobals -> Cseq
 pprNode addr heap globals = cConcat [ cLPNum 3 addr, cStr " -> ",
