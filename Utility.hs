@@ -49,7 +49,6 @@ module CoreLanguage.Utility (
 
     )where
 
-import Data.Bits (shiftL)
 import Data.Map (Map, keys, elems, findWithDefault, 
                     insert, empty, union, fromList)
 
@@ -61,10 +60,9 @@ import Data.Map (Map, keys, elems, findWithDefault,
 --  * an extra part count heap maniputations
 --
 --  every node in the BST in indexed by an address taken out of 
---  the address pool, since the node index are monotonic when insertBSTed
---  in the BST, the tree is also balanced. The following functions are
---  all from A.1.1 in appendix, but implementation differently, and 
---  @showaddr@ is not needed since @Addr@ is a type synonym of @Int@.
+--  the address pool. The following functions are all from A.1.1 in appendix,
+--  but implementation differently, and @showaddr@ is not needed 
+--  since @Addr@ is a type synonym of @Int@.
 type Heap a = ([Addr], [Addr], BST Addr a, (Int, Int, Int))
 
 -- | address are represented as numbers
@@ -76,8 +74,9 @@ hInitial = ([1..], [], emptyBST, (0, 0, 0))
 
 -- | allocate an object in heap and return the address and new heap
 hAlloc :: Heap a -> a -> (Heap a, Addr)
+hAlloc ([], _, _, _)  _ = error "empty address pool"
 hAlloc (addr:ap, uap, tree, (al, ud, fr)) node = 
-    ((ap, addr:uap, insertBST addr node tree, (al+1, ud, fr)), addr)
+    ((ap, addr:uap, insertInBST addr node tree, (al+1, ud, fr)), addr)
 
 -- | update an object at specific address
 hUpdate :: Heap a -> Addr -> a -> Heap a
@@ -91,6 +90,7 @@ hFree (ap, uap, tree, (al, ud ,fr)) addr =
         where del x0 (x:xs)
                 | x0 == x = xs
                 | otherwise = del x0 xs
+              del _ [] = error "deleting non-existing node"
 
 -- | look for an object in the heap
 hLookup :: Heap a -> Addr -> a
@@ -125,6 +125,7 @@ hNull = 0
 hIsnull :: Addr -> Bool
 hIsnull a = a == hNull
 
+-- TODO: use BST here
 -- | use Map in Data.Map to implement @Assocs@
 type Assocs a b = Map a b
 
@@ -152,7 +153,7 @@ aCombine = union
 
 -- | insert a pair of key-value in to assoc list
 aInsert :: Ord k => (k,v) -> Assocs k v -> Assocs k v
-aInsert (k,v) al = insert k v al
+aInsert (k, v) = insert k v
 
 -- | convert a list of key-value pair into assocs list
 aFromList :: Ord k => [(k,v)] -> Assocs k v
@@ -165,41 +166,117 @@ data BST k a    = Tip
                 | BinNode Int k a (BST k a) (BST k a)
     deriving Show
 
+-- the critical weight for performing balance operation
+weight :: Int
+weight = 4
+
 emptyBST :: BST k a 
 emptyBST = Tip
+
+-- build a tree from key, value and subtrees and make sure 
+-- the size is correct
+buildBST :: Ord k => k -> a -> BST k a -> BST k a -> BST k a
+buildBST key obj lt rt = 
+    let size = 1 + sizeOfBST lt + sizeOfBST rt 
+    in BinNode size key obj lt rt
 
 -- insert new element in BST, since it's used in a heap with 
 -- an address pool, the key is promised to be distinguished with
 -- every node in BST 
-insertBST :: Ord k => k -> a -> BST k a -> BST k a
-insertBST key obj Tip = BinNode 1 key obj Tip Tip
-insertBST key obj tree@(BinNode size k o lc rc)
-    | size' `elemInfAsc` powerOf2 = case compare key k of
-                LT -> BinNode size' key obj Tip tree
-                GT -> BinNode size' key obj tree Tip
-    | otherwise = case compare key k of
-                    LT -> BinNode size' k o (insertBST key obj lc) rc
-                    GT -> BinNode size' k o lc (insertBST key obj rc)
-                    EQ -> BinNode size' k obj lc rc
-        where elemInfAsc t (a:as)
-                | t==a = True
-                | t<a = False
-                | otherwise = t `elemInfAsc` as
-              powerOf2 = iterate (flip shiftL 1) 1
-              size' = size+1
+insertInBST :: Ord k => k -> a -> BST k a -> BST k a
+insertInBST key obj Tip = BinNode 1 key obj Tip Tip
+insertInBST key obj (BinNode _ rtkey rtobj lt rt) = balanceBST newTree
+    where   newTree = case compare key rtkey of
+                LT -> buildBST rtkey rtobj (insertInBST key obj lt) rt
+                GT -> buildBST rtkey rtobj lt (insertInBST key obj rt)
+                EQ -> buildBST key obj lt rt
 
--- update an element in BST, and for the same reason in @insertBST@,
+-- balance a tree after inserting/deleting one element,
+-- use size as balance criterion
+balanceBST :: Ord k => BST k a -> BST k a
+balanceBST Tip = Tip
+balanceBST tree@(BinNode _ _ _ lt rt)
+        | lsize + rsize < 2 = tree
+        | lsize > weight * rsize =
+            let BinNode _ _ _ llt lrt = lt
+                llsize = sizeOfBST llt
+                lrsize = sizeOfBST lrt
+            in case compare llsize lrsize of
+                LT -> doubleRotationR tree
+                _ -> singleRotationR tree
+        | lsize * weight < rsize =
+            let BinNode _ _ _ rlt rrt= rt
+                rlsize = sizeOfBST rlt
+                rrsize = sizeOfBST rrt 
+            in case compare rlsize rrsize of
+                GT -> doubleRotationL tree
+                _ -> singleRotationL tree
+        | otherwise = tree
+        where   lsize = sizeOfBST lt
+                rsize = sizeOfBST rt
+
+-- rotation functions
+singleRotationL, singleRotationR, doubleRotationL, doubleRotationR :: 
+            Ord k => BST k a -> BST k a
+singleRotationL Tip = Tip
+singleRotationL (BinNode rtsize rtkey rtobj lt rt) =
+    let BinNode _ rkey robj rlt rrt = rt 
+        newlt = buildBST rtkey rtobj lt rlt
+    in  BinNode rtsize rkey robj newlt rrt
+
+singleRotationR Tip = Tip
+singleRotationR (BinNode rtsize rtkey rtobj lt rt) = 
+    let BinNode _ lkey lobj llt lrt = lt
+        newrt = buildBST rtkey rtobj lrt rt
+    in BinNode rtsize lkey lobj llt newrt
+
+doubleRotationL Tip = Tip
+doubleRotationL (BinNode rtsize rtkey rtobj sub1t rt) = 
+    let BinNode _ rkey robj rlt sub4t = rt
+        BinNode _ rlkey rlobj sub2t sub3t = rlt
+        newlt = buildBST rtkey rtobj sub1t sub2t
+        newrt = buildBST rkey robj sub3t sub4t
+    in BinNode rtsize rlkey rlobj newlt newrt
+
+doubleRotationR Tip = Tip
+doubleRotationR (BinNode rtsize rtkey rtobj lt sub4t) = 
+    let BinNode _ lkey lobj sub1t lrt = lt
+        BinNode _ lrkey lrobj sub2t sub3t = lrt
+        newlt = buildBST lkey lobj sub1t sub2t
+        newrt = buildBST rtkey rtobj sub3t sub4t
+    in BinNode rtsize lrkey lrobj newlt newrt
+
+-- update an element in BST, and for the same reason in @insertInBST@,
 -- no need to check key existed in the origin BST
 updateBST :: Ord k => k -> a -> BST k a -> BST k a
+updateBST _ _ Tip = error "updating a non-existing node"
 updateBST key obj (BinNode size k o lc rc) = 
     case compare key k of
       LT -> BinNode size k o (updateBST key obj lc) rc
       GT -> BinNode size k o lc (updateBST key obj rc)
       EQ -> BinNode size k obj lc rc
 
+deleteInBST :: Ord k => k -> BST k a -> BST k a
+deleteInBST _ Tip = Tip
+deleteInBST key (BinNode _ rtkey rtobj lt rt) = balanceBST newTree
+    where newTree = case compare key rtkey of
+            LT -> buildBST rtkey rtobj (deleteInBST key lt) rt
+            GT -> buildBST rtkey rtobj lt (deleteInBST key rt)
+            EQ -> combineBST lt rt
+
+combineBST :: Ord k => BST k a -> BST k a -> BST k a
+combineBST tree Tip = tree
+combineBST Tip tree = tree
+combineBST tree1 tree2 = balanceBST newTree
+    where   newTree = case compare size1 size2 of
+                LT -> buildBST key2 obj2 (combineBST tree1 lt2) rt2
+                _ -> buildBST key1 obj1 lt1 (combineBST rt1 tree2)
+            BinNode size1 key1 obj1 lt1 rt1 = tree1
+            BinNode size2 key2 obj2 lt2 rt2 = tree2
+
 findInBST :: Ord k => k -> BST k a -> a
 findInBST _ Tip = error "the key did not in the BST"
-findInBST key (BinNode size k o lc rc) = 
+findInBST key (BinNode _ k o lc rc) = 
     case compare key k of 
       LT -> findInBST key lc
       GT -> findInBST key rc
@@ -218,7 +295,7 @@ mapAccuml   :: (a -> b -> (a,c))    -- ^ function take the old accumulator and
             -> a                    -- ^ initial accumulator
             -> [b]                  -- ^ input list
             -> (a, [c])             -- ^ final acc and result list
-mapAccuml f acc [] = (acc,[])
+mapAccuml _ acc [] = (acc,[])
 mapAccuml f acc (b:bs) = (acc'', c:cs)
     where (acc', c) = f acc b
           (acc'', cs) = mapAccuml f acc' bs
@@ -226,7 +303,7 @@ mapAccuml f acc (b:bs) = (acc'', c:cs)
 -- | sort a list with ascending order
 sort :: Ord a => [a] -> [a]
 sort [] = []
-sort (a:[]) = [a]
+sort [a] = [a]
 sort as = merge (sort xs) (sort ys)
     where (xs,ys) = splitAt (length as `div`2) as
           merge ms [] = ms
