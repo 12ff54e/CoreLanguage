@@ -42,15 +42,12 @@ module CoreLanguage.Utility (
     , aCombine, aInsert, aEmpty, aFromList
 
     -- ** Associate list Query
-    , aDomain, aRange, aLookup
+    , aDomain, aRange, aLookup, aToList
     
     -- * A.5 Other useful function definitions
     , mapAccuml, sort, space
 
     )where
-
-import Data.Map (Map, keys, elems, findWithDefault, 
-                    insert, empty, union, fromList)
 
 -- | The heap is represented as a quadruple, containing
 --
@@ -85,12 +82,13 @@ hUpdate (ap, uap, tree, (al, ud, fr)) addr node =
 
 -- | remove a specific object, for now it only changes address pool
 hFree :: Heap a -> Addr -> Heap a
-hFree (ap, uap, tree, (al, ud ,fr)) addr = 
-    (addr:ap, del addr uap, tree, (al, ud, fr+1))
-        where del x0 (x:xs)
+hFree heap@(ap, uap, tree, (al, ud ,fr)) addr
+    | 2 * (al - fr) < sizeOfBST tree = hFree (cleanHeap heap) addr
+    | otherwise = (addr:ap, del addr uap, tree, (al, ud, fr+1))
+    where   del x0 (x:xs)
                 | x0 == x = xs
                 | otherwise = del x0 xs
-              del _ [] = error "deleting non-existing node"
+            del _ [] = error "deleting non-existing node"
 
 -- | look for an object in the heap
 hLookup :: Heap a -> Addr -> a
@@ -125,39 +123,48 @@ hNull = 0
 hIsnull :: Addr -> Bool
 hIsnull a = a == hNull
 
--- TODO: use BST here
+-- cleans the heap, removing all node not belonging used address pool
+cleanHeap :: Heap a -> Heap a
+cleanHeap (ap, uap, tree, stas@(al, _, fr)) = (ap, uap, newTree, stas)    
+    where   newTree = foldl (flip deleteInBST) tree (take n ap)
+            n = sizeOfBST tree - al + fr
+
 -- | use Map in Data.Map to implement @Assocs@
-type Assocs a b = Map a b
+type Assocs a b = BST a b
 
 -- | @aLookup aList key default@ find the value of @key@ in @aList@
 -- and return @default@ if the key is not in associate list
 aLookup :: Ord k => Assocs k v -> k -> v -> v
-aLookup al key def = findWithDefault def key al
+aLookup al key def = findWithDefaultInBST def key al
 
 -- | gives all the keys of the associate list
-aDomain :: Assocs k v -> [k]
-aDomain = keys
+aDomain :: Ord k => Assocs k v -> [k]
+aDomain = map fst . convertListFromBST
 
 -- | gives all the values of the associate list
-aRange :: Assocs k v -> [v]
-aRange = elems
+aRange :: Ord k => Assocs k v -> [v]
+aRange = map snd . convertListFromBST
 
 -- | an empty associate list
 aEmpty :: Assocs k v
-aEmpty = empty
+aEmpty = emptyBST
 
 -- | Union two associate lists. When key crashes, the value from
 -- first assocs list is prefered.
 aCombine :: Ord k => Assocs k v -> Assocs k v -> Assocs k v
-aCombine = union
+aCombine = combineBST
 
 -- | insert a pair of key-value in to assoc list
 aInsert :: Ord k => (k,v) -> Assocs k v -> Assocs k v
-aInsert (k, v) = insert k v
+aInsert (k, v) = insertInBST k v
 
 -- | convert a list of key-value pair into assocs list
 aFromList :: Ord k => [(k,v)] -> Assocs k v
-aFromList = fromList
+aFromList = convertListToBST
+
+-- | convert an assocs list into a list of key-value pair
+aToList :: Ord k => Assocs k v -> [(k, v)]
+aToList = convertListFromBST
 
 -----------------------------------------------------------------------
 
@@ -197,14 +204,14 @@ balanceBST :: Ord k => BST k a -> BST k a
 balanceBST Tip = Tip
 balanceBST tree@(BinNode _ _ _ lt rt)
         | lsize + rsize < 2 = tree
-        | lsize > weight * rsize =
+        | lsize >= weight * rsize =
             let BinNode _ _ _ llt lrt = lt
                 llsize = sizeOfBST llt
                 lrsize = sizeOfBST lrt
             in case compare llsize lrsize of
                 LT -> doubleRotationR tree
                 _ -> singleRotationR tree
-        | lsize * weight < rsize =
+        | lsize * weight <= rsize =
             let BinNode _ _ _ rlt rrt= rt
                 rlsize = sizeOfBST rlt
                 rrsize = sizeOfBST rrt 
@@ -264,23 +271,34 @@ deleteInBST key (BinNode _ rtkey rtobj lt rt) = balanceBST newTree
             GT -> buildBST rtkey rtobj lt (deleteInBST key rt)
             EQ -> combineBST lt rt
 
+-- when key crushes, keep the node from the first tree
 combineBST :: Ord k => BST k a -> BST k a -> BST k a
-combineBST tree Tip = tree
-combineBST Tip tree = tree
-combineBST tree1 tree2 = balanceBST newTree
-    where   newTree = case compare size1 size2 of
-                LT -> buildBST key2 obj2 (combineBST tree1 lt2) rt2
-                _ -> buildBST key1 obj1 lt1 (combineBST rt1 tree2)
-            BinNode size1 key1 obj1 lt1 rt1 = tree1
-            BinNode size2 key2 obj2 lt2 rt2 = tree2
+combineBST tree1 tree2 = convertListToBST $ 
+    merge (convertListFromBST tree1) (convertListFromBST tree2)
+    where   merge [] x = x
+            merge y [] = y
+            merge ms@((km, vm):mt) ns@((kn, vn):nt)
+                | km > kn = (kn, vn) : merge ms nt
+                | otherwise = (km, vm) : merge mt ns
+
+convertListFromBST :: Ord k => BST k a -> [(k, a)]
+convertListFromBST Tip = []
+convertListFromBST (BinNode _ key obj lt rt) = 
+    convertListFromBST lt ++ (key, obj) : convertListFromBST rt
+
+convertListToBST :: Ord k => [(k, a)] -> BST k a
+convertListToBST = foldl (flip $ uncurry insertInBST) emptyBST 
 
 findInBST :: Ord k => k -> BST k a -> a
-findInBST _ Tip = error "the key did not in the BST"
-findInBST key (BinNode _ k o lc rc) = 
-    case compare key k of 
-      LT -> findInBST key lc
-      GT -> findInBST key rc
-      EQ -> o
+findInBST = findWithDefaultInBST (error "key not found")
+
+findWithDefaultInBST :: Ord k => a -> k -> BST k a -> a
+findWithDefaultInBST def _ Tip = def
+findWithDefaultInBST def key (BinNode _ k o lt rt) = 
+    case compare key k of
+        LT -> findWithDefaultInBST def key lt
+        GT -> findWithDefaultInBST def key rt
+        EQ -> o
 
 sizeOfBST :: BST k a -> Int
 sizeOfBST Tip = 0
