@@ -10,7 +10,7 @@
 --
 -----------------------------------------------------------------------------
 
-module CoreLanguage.Base (
+module Base (
 
     -- * Data types
     Expr(..), Alter(..), ScDef(..), Program(..), Cseq(..)
@@ -43,7 +43,7 @@ module CoreLanguage.Base (
     
     )where
 
-import CoreLanguage.Utility
+import Utility
 
 -- | Expressions are the basic unit of the /Core Language/
 -- and thus a new data type is defined. Expression can be variable,
@@ -182,7 +182,7 @@ cNewline = CNewline
 
 -- | put an indentation indication in container
 cIndent :: Cseq -> Cseq
-cIndent cseq = CIndent cseq
+cIndent = CIndent
 
 -- | concatenate a list of cseqs to one
 cConcat :: [Cseq] -> Cseq
@@ -222,7 +222,7 @@ cExpand col ((CNil, _) : as) = cExpand col as
 cExpand col ((CStr a, _) : as) = a ++ cExpand (col+length a) as
 cExpand col ((CAppend a b, ind) : as) = cExpand col ((a,ind):(b,ind):as)
 cExpand col ((CNewline, ind) : as) = 
-    '\n':(space ind) ++ cExpand ind as
+    '\n':space ind ++ cExpand ind as
 cExpand col ((CIndent a, ind) : as) = cExpand col ((a,col) : as)
 
 -----------------------------------------------------------------------------
@@ -233,7 +233,7 @@ pPrint = cToStr.pprProgram
 
 -- | turn a program into cseq
 pprProgram :: CoreProgram -> Cseq
-pprProgram = (cIntercalate spt). map pprScDef
+pprProgram = cIntercalate spt . map pprScDef
     where spt = cStr ";" `cAppend` cNewline
 
 pprScDef :: CoreScDef -> Cseq
@@ -305,7 +305,7 @@ pprFAExpr _ expr = pprExpr expr
 
 -- auxiliary function to print definations in let binding
 pprDefs :: [(Name,Expr Name)] -> Cseq
-pprDefs = (cIntercalate spt) . (map pprDef)
+pprDefs = cIntercalate spt . map pprDef
     where spt = cStr ";" `cAppend` cNewline
 
 pprDef :: (Name,Expr Name) -> Cseq
@@ -314,7 +314,7 @@ pprDef (var,expr) = cConcat [   cStr var, cStr " = ",
 
 -- auxiliary function to print alternatives in case expression
 pprAlts :: [CoreAlter] -> Cseq
-pprAlts = (cIntercalate spt) . (map pprAlt)
+pprAlts = cIntercalate spt . map pprAlt
     where spt = cStr ";" `cAppend` cNewline
 
 pprAlt :: CoreAlter -> Cseq
