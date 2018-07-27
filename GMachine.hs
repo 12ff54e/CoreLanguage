@@ -59,6 +59,8 @@ type GmCode = [Instruction]
 --  * @CaseJump caselist@ pick the code pieces in @caselist@ according to
 --      the constructor on top of stack
 --  * @Print@ generates output of program and put it in @GmOutput@
+--  * @MakeGlobal@ provides a method to add supercombinators in runtime,
+--      which makes the compiler able to perform program transformation
 data Instruction    = PushGlobal Name
                     | Push Int
                     | PushInt Int 
@@ -188,7 +190,7 @@ compileExpr depth args expr = case expr of
         compileLet isRec bindings body depth args
     EConstr tag arity -> 
         [PushGlobal ("Pack{"++show tag++","++show arity++"}")]
-    ECase _ _ -> error "can't compile case expression in lazy scheme yet" -- FIXME: remove this error
+    ECase _ _ -> compileCase depth args expr
 --    ECase body alters -> take nargs [Push n | n <- [depth ..]] ++
 --        [MakeGlobal nargs (compileExprStrict 0 args expr)] ++
 --        replicate nargs Mkap
@@ -279,6 +281,12 @@ compileLetStrict isRec bindings body depth args
               defs = rhssOf bindings
               cwds = compileExprStrict 0 args'
               args' = bindersOf bindings ++ replicate depth "_" ++ args
+
+-- compile case expression in C scheme
+compileCase :: Int -> [Name] -> CoreExpr -> GmCode
+compileCase depth args expr = replicate nargs (Push (depth + nargs)) ++
+    [MakeGlobal nargs code] ++ replicate nargs Mkap
+    where   (_, nargs, code) = compileSc ("case", args, expr)
 
 compileAlter :: Int -> [Name] -> CoreAlter -> (Int, GmCode)
 compileAlter depth args (tag, constrArgs, body) = (tag, code)
@@ -375,6 +383,9 @@ advanceStep state =
             where NConstr _ args = hLookup heap a
         CaseJump alters -> caseJump alters newState
         Print -> putStack as $ printAddr a newState
+        MakeGlobal n code -> 
+            let (newHeap, addr) = hAlloc heap (NGlobal n code)
+            in putHeap newHeap $ putStack (addr:stack) newState
         prims -> primStep prims newState
 
 pushGlobal :: Name -> GmState -> GmState
@@ -421,7 +432,7 @@ unwind state = case hLookup (getHeap state) addr of
     where stack@(addr:as) = getStack state
           checkDump = case getDump state of
             (c,s):ds -> putDump ds . putCode c . putStack (addr:s) $ state
-            _ -> state
+            _ -> putCode [Print] state
 
 rearrange :: Int -> GmState -> GmState
 rearrange n state = putStack newStack state
@@ -550,8 +561,11 @@ pprNode :: Addr -> GmHeap -> GmGlobals -> Cseq
 pprNode addr heap globals = cConcat [ cLPNum 3 addr, cStr " -> ",
     case hLookup heap addr of
         NAp a1 a2 -> cConcat [ cStr "Ap", cLPNum 4 a1, cLPNum 4 a2  ]
-        NGlobal _ _ -> let name:_ = [ n | (n,a) <- aToList globals, a==addr]
-                       in cStr ("Supercombinator "++name)
+        NGlobal _ code ->  
+            let name = case [ n | (n,a) <- aToList globals, a==addr] of
+                            [] -> "\"a Case Expr\""
+                            l -> head l
+            in cStr ("Supercombinator "++name)
         NNum num -> cStr "Num " `cAppend` cNum num
         NInd aInd -> cStr "Indirection to " `cAppend` cNum aInd
         NConstr tag args -> cIntercalate (cStr " ") 

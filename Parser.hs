@@ -115,12 +115,14 @@ pLit str = pSat (\(_,t) -> str==t)
 pApply :: Parser a -> (a->b) -> Parser b
 pApply p f toks = [ (f x,toks') | (x,toks') <- p toks ]
 
--- | a parser for variables
+-- | a parser for variables 
 pVar :: Parser Name 
 pVar = pSat (\(_,tok) -> 
-    (isLetter.head) tok 
-    && notElem tok keywords 
-    || tok `elem` concat operators )
+    (isLetter.head) tok && notElem tok keywords)
+
+-- | a parser for operators
+pOp :: Parser CoreExpr 
+pOp = pSat (\(_,tok) -> tok `elem` concat operators) `pApply` EVar
 
 -- | a parser for number
 pNum :: Parser Int
@@ -255,7 +257,7 @@ pExpr_p3 = pThen combineOp pExpr_p4 pExpr_p3r
 pExpr_p4 = pThen combineOp pExpr_p5 pExpr_p4r
 pExpr_p5 = pThen combineOp pExpr_p6 pExpr_p5r
 pExpr_p6 = pOneOrMore pAExpr `pApply` mk_app_chain
-    where mk_app_chain = foldl1 EAp
+    where mk_app_chain = foldl1 EAp 
 
 pExpr_p1r, pExpr_p2r, pExpr_p3r, pExpr_p4r, pExpr_p5r :: Parser PartExpr
 pExpr_p1r = pThen FoundOp (pLit "|") pExpr_p1 `pOr` pEmpty NoOp
@@ -270,7 +272,7 @@ pExpr_p5r = pThen FoundOp (pLit "*") pExpr_p5
 -- Atomic expression can be variable, number, constructor or
 -- parenthesised expression.
 pAExpr = (pVar `pApply` EVar) `pOr` (pNum `pApply` ENum) `pOr`
-    pConstr `pOr` pThen3 ts (pLit "(") pExpr (pLit ")")
+    pConstr `pOr` pThen3 ts (pLit "(") (pExpr `pOr` pOp) (pLit ")")
         where ts _ x _ = x
 
 pConstr :: Parser CoreExpr
