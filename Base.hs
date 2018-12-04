@@ -190,8 +190,8 @@ cConcat = foldr cAppend CNil
 
 -- | @intercalate@ for Cseq
 cIntercalate :: Cseq -> [Cseq] -> Cseq
-cIntercalate cspt = foldr1 
-    (\x y -> x `cAppend` cspt `cAppend` y)
+cIntercalate _ [] = CNil
+cIntercalate cspt cs = foldr1 (\x y -> x `cAppend` cspt `cAppend` y) cs
 
 -- | put a number in container
 cNum :: Int -> Cseq

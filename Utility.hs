@@ -187,9 +187,7 @@ buildBST key obj lt rt =
     let size = 1 + sizeOfBST lt + sizeOfBST rt 
     in BinNode size key obj lt rt
 
--- insert new element in BST, since it's used in a heap with 
--- an address pool, the key is promised to be distinguished with
--- every node in BST 
+-- insert new element in BST
 insertInBST :: Ord k => k -> a -> BST k a -> BST k a
 insertInBST key obj Tip = BinNode 1 key obj Tip Tip
 insertInBST key obj (BinNode _ rtkey rtobj lt rt) = balanceBST newTree
@@ -253,8 +251,9 @@ doubleRotationR (BinNode rtsize rtkey rtobj lt sub4t) =
         newrt = buildBST rtkey rtobj sub3t sub4t
     in BinNode rtsize lrkey lrobj newlt newrt
 
--- update an element in BST, and for the same reason in @insertInBST@,
--- no need to check key existed in the origin BST
+-- update an element in BST, since it's used in a heap with 
+-- an address pool, the key is promised to be appeared with
+-- every node in BST 
 updateBST :: Ord k => k -> a -> BST k a -> BST k a
 updateBST _ _ Tip = error "updating a non-existing node"
 updateBST key obj (BinNode size k o lc rc) = 
@@ -271,15 +270,23 @@ deleteInBST key (BinNode _ rtkey rtobj lt rt) = balanceBST newTree
             GT -> buildBST rtkey rtobj lt (deleteInBST key rt)
             EQ -> combineBST lt rt
 
--- when key crushes, keep the node from the first tree
+-- combine two BST, if one tree is small, the operation is implemented as
+-- inserting the nodes in the small tree into the bigger one; otherwise 
+-- both trees will be transformed into list first. When key crushes, 
+-- either node will be kept
 combineBST :: Ord k => BST k a -> BST k a -> BST k a
-combineBST tree1 tree2 = convertListToBST $ 
-    merge (convertListFromBST tree1) (convertListFromBST tree2)
+combineBST tree1 tree2
+    | sizeOfBST tree1 < 5 = addSmallBST tree1 tree2
+    | sizeOfBST tree2 < 5 = addSmallBST tree2 tree1
+    | otherwise = convertListToBST $ 
+        merge (convertListFromBST tree1) (convertListFromBST tree2)
     where   merge [] x = x
             merge y [] = y
             merge ms@((km, vm):mt) ns@((kn, vn):nt)
                 | km > kn = (kn, vn) : merge ms nt
                 | otherwise = (km, vm) : merge mt ns
+            addSmallBST st bt = foldl (flip $ uncurry insertInBST) bt $ 
+                convertListFromBST st
 
 convertListFromBST :: Ord k => BST k a -> [(k, a)]
 convertListFromBST Tip = []
