@@ -122,17 +122,29 @@ codeLookup cs label =
     aLookup cs label $ error ("Labal " ++ show label ++ " undefined.")
 
 -- | statistics
-type TimStats = Int
+data TimStats = TimStats {
+    step :: Int,
+    maxStackDepth :: Int,
+    heapLog :: (Int, Int), 
+        -- Heap allocation time of last step, heap allocation of closures
+    execTime :: Int
+}
 
 statsInitial :: TimStats
-statsInitial = 0
+statsInitial = TimStats 0 0 (0, 0) 0
 
--- | increase step count by one in statistics
-statsIncStep :: TimStats -> TimStats
-statsIncStep = succ
+-- | set step in statistics, similar functions in the following
+statsSetStep :: Int -> TimStats -> TimStats
+statsSetStep n (TimStats x y z w) = TimStats n y z w
 
-statsGetStep :: TimStats -> Int
-statsGetStep = id
+statsSetMSD :: Int -> TimStats -> TimStats
+statsSetMSD n (TimStats x y z w) = TimStats x n z w
+
+statsSetHL :: (Int, Int) -> TimStats -> TimStats
+statsSetHL n (TimStats x y z w) = TimStats x y n w
+
+statsSetET :: Int -> TimStats -> TimStats
+statsSetET n (TimStats x y z w) = TimStats x n z n
 
 ------------------------------------------------------------------------------
 ------------------------------------------------------------------------------
@@ -175,9 +187,11 @@ dumpInitial :: TimDump
 dumpInitial = DummyD
 
 compileSc :: [(Name, TimAddr)] -> CoreScDef -> (Name, [Instruction])
-compileSc env (name, args, expr) = 
-    (name, Take (length args) : 
-        compileExpr (aFromList $ zip args (map Arg [1..]) ++ env) expr)
+compileSc env (name, args, expr) = (name, code)
+    where   code
+                | null args = cc
+                | otherwise = Take (length args) : cc
+            cc = compileExpr (aFromList $ zip args (map Arg [1..]) ++ env) expr
 
 compileExpr :: Assocs Name TimAddr -> CoreExpr -> [Instruction]
 compileExpr env expr = case expr of
@@ -201,10 +215,28 @@ eval :: TimState -> [TimState]
 eval state = state : subsequentStates
     where subsequentStates
             | timFinal state = []
-            | otherwise = eval . doAdmin . advance $ state 
+            | otherwise = eval . advance . statsLog $ state 
 
-doAdmin :: TimState -> TimState
-doAdmin state = setStats (statsIncStep $ stats state) state
+statsLog :: TimState -> TimState
+statsLog state = statsLogHeap $ setStats newStats state
+    where   oldStats@(TimStats x y z w) = stats state
+            newStats = statsSetStep (x+1) . statsSetMSD sd .
+                statsSetET et $ oldStats
+            sd = max y (length $ stack state)
+            et = case head (currentCode state) of
+                    Take n -> w + n
+                    _ -> w + 1
+
+statsLogHeap :: TimState -> TimState
+statsLogHeap state = setStats newStats state
+    where   newStats = statsSetHL (a, b) (stats state)
+            (x, y) = heapLog $ stats state
+            a = hGetAllocTimes h
+            b = case compare a x of
+                    GT -> y + nf
+                    _ -> y
+            nf = length . hLookup h . head . hAddresses $ h
+            h = heap state
 
 timFinal :: TimState -> Bool
 timFinal = null . currentCode 
@@ -237,9 +269,11 @@ timAddr2Cls addr state = case addr of
             oFramePtr = framePtr state
             oCodeStore = codeStore state
 
-
 intCode :: [Instruction]
 intCode = []
+
+-- TODO: add garbage collector, following every frame ptr needed 
+--  in each closure to find out all living frames in heap
 
 ------------------------------------------------------------------------------
 
@@ -268,7 +302,10 @@ showSc (name, ins) = cConcat [cStr name, cStr ": ", showCode Full ins]
 data Form = Full | Laconic | Short
 
 showCode :: Form -> [Instruction] -> Cseq
-showCode form = cIntercalate (cStr ", ") . map (showInstruction form)
+showCode form code = case form of
+    Full -> cIntercalate (cStr ", ") . map (showInstruction Full) $ code
+    Laconic -> cIntercalate (cStr ", ") . map (showInstruction Short) $ code
+    Short -> cStr "..."
 
 showInstruction :: Form -> Instruction -> Cseq
 showInstruction form ins = case ins of
@@ -281,15 +318,17 @@ showTimAddr form ta = case ta of
     Arg n -> cStr "Arg " `cAppend` cNum n
     Labal s -> cStr "Label " `cAppend` cStr s
     IntConst n -> cStr "Number " `cAppend` cNum n
-    Code c ->   let cc = case form of
-                        Full -> showCode Full c
-                        Laconic -> showCode Laconic c
-                        Short -> cStr "..."
+    Code c ->   let cc = showCode form c
                 in cStr "Code [" `cAppend` cc `cAppend` cStr "]"
 
 showStats :: TimStats -> Cseq
 showStats s = cConcat [cStr "Statistics: ", cNewline, cStr (space 4),
-    cIndent $ cStr "Total Steps: " `cAppend` cNum (statsGetStep s)]
+    cIndent $ cConcat [cStr "Total Steps: ", cNum (step s), cNewline,
+    cStr "MaxStepDepth: ", cNum (maxStackDepth s), cNewline,
+    cStr "Heap allocation of ", cNum x, cStr " frames and ", cNum y,
+    cStr " closures.", cNewline,
+    cStr "Execution times: ", cNum (execTime s)]]
+    where (x, y) = heapLog s
 
 showState ::TimState -> Cseq
 showState = cIntercalate cNewline . 
@@ -310,7 +349,7 @@ showFramePointer h ptr =
             FrameAddr addr -> cStr "Frame Address: " `cAppend` cNum addr
             FrameInt n -> cStr "Number " `cAppend` cNum n
             FrameNull -> cStr "Null Pointer"
-    in cStr "Frame Pointer: " `cAppend` cptr
+    in cStr "Frame Pointer -> " `cAppend` cptr
 
 showStack :: TimState -> Cseq
 showStack state = cConcat [cStr "Stack: ", cNewline,
